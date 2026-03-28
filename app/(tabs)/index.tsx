@@ -6,12 +6,10 @@ import {
   StyleSheet,
   Text,
   TouchableOpacity,
-  Alert,
+  Linking,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
-import * as FileSystem from 'expo-file-system';
-import * as IntentLauncher from 'expo-intent-launcher';
 import { useTheme } from '@/src/theme';
 import { useItemStore } from '@/src/store';
 import { useSettingsStore } from '@/src/store/useSettingsStore';
@@ -152,35 +150,9 @@ function ApiCostBanner() {
 
 function UpdateBanner({ release, onDismiss }: { release: GitHubRelease; onDismiss: () => void }) {
   const { theme } = useTheme();
-  const [downloading, setDownloading] = useState(false);
-  const [progress, setProgress] = useState(0);
 
-  const handleUpdate = async () => {
-    setDownloading(true);
-    try {
-      const dest = FileSystem.cacheDirectory + `PriceNinja-${release.version}.apk`;
-      const dl = FileSystem.createDownloadResumable(
-        release.apkUrl,
-        dest,
-        {},
-        ({ totalBytesWritten, totalBytesExpectedToWrite }) => {
-          if (totalBytesExpectedToWrite > 0) {
-            setProgress(Math.round((totalBytesWritten / totalBytesExpectedToWrite) * 100));
-          }
-        },
-      );
-      const result = await dl.downloadAsync();
-      if (!result?.uri) throw new Error('Download fehlgeschlagen');
-      await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
-        data: result.uri,
-        flags: 1,
-        type: 'application/vnd.android.package-archive',
-      });
-    } catch {
-      Alert.alert('Update fehlgeschlagen', 'Bitte manuell von GitHub herunterladen.');
-    } finally {
-      setDownloading(false);
-    }
+  const handleUpdate = () => {
+    Linking.openURL(release.apkUrl);
   };
 
   return (
@@ -188,18 +160,17 @@ function UpdateBanner({ release, onDismiss }: { release: GitHubRelease; onDismis
       <View style={{ flex: 1 }}>
         <ThemedText weight="bold" size="sm">🚀 Update verfügbar: {release.version}</ThemedText>
         <ThemedText variant="muted" size="xs" style={{ marginTop: 2 }}>
-          {downloading ? `Herunterladen... ${progress}%` : 'Neue Version verfügbar'}
+          Neue Version verfügbar
         </ThemedText>
       </View>
       <View style={{ flexDirection: 'row', gap: 8 }}>
         <TouchableOpacity
           onPress={handleUpdate}
-          disabled={downloading}
-          style={[styles.updateBtn, { backgroundColor: theme.colors.primary, opacity: downloading ? 0.6 : 1 }]}
-          accessibilityLabel="Update installieren"
+          style={[styles.updateBtn, { backgroundColor: theme.colors.primary }]}
+          accessibilityLabel="Update herunterladen"
         >
           <Text style={{ color: theme.colors.background, fontWeight: 'bold', fontSize: 12 }}>
-            {downloading ? `${progress}%` : 'Update'}
+            Update
           </Text>
         </TouchableOpacity>
         <TouchableOpacity onPress={onDismiss} accessibilityLabel="Update schließen">
