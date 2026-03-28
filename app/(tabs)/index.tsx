@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   View,
   FlatList,
@@ -6,15 +6,19 @@ import {
   StyleSheet,
   Text,
   TouchableOpacity,
+  Alert,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
+import * as FileSystem from 'expo-file-system';
+import * as IntentLauncher from 'expo-intent-launcher';
 import { useTheme } from '@/src/theme';
 import { useItemStore } from '@/src/store';
 import { useSettingsStore } from '@/src/store/useSettingsStore';
 import { ThemedView, ThemedText, GlowCard, SkeletonCard, PriceNinjaLogo } from '@/src/components/ui';
 import { formatPrice, priceTrend } from '@/src/utils/pricing';
 import { TrackedItem } from '@/src/types/item';
+import { checkForUpdate, GitHubRelease } from '@/src/api/github-updates';
 
 function ItemCard({ item }: { item: TrackedItem }) {
   const { theme } = useTheme();
@@ -146,10 +150,77 @@ function ApiCostBanner() {
   );
 }
 
+function UpdateBanner({ release, onDismiss }: { release: GitHubRelease; onDismiss: () => void }) {
+  const { theme } = useTheme();
+  const [downloading, setDownloading] = useState(false);
+  const [progress, setProgress] = useState(0);
+
+  const handleUpdate = async () => {
+    setDownloading(true);
+    try {
+      const dest = FileSystem.cacheDirectory + `PriceNinja-${release.version}.apk`;
+      const dl = FileSystem.createDownloadResumable(
+        release.apkUrl,
+        dest,
+        {},
+        ({ totalBytesWritten, totalBytesExpectedToWrite }) => {
+          if (totalBytesExpectedToWrite > 0) {
+            setProgress(Math.round((totalBytesWritten / totalBytesExpectedToWrite) * 100));
+          }
+        },
+      );
+      const result = await dl.downloadAsync();
+      if (!result?.uri) throw new Error('Download fehlgeschlagen');
+      await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
+        data: result.uri,
+        flags: 1,
+        type: 'application/vnd.android.package-archive',
+      });
+    } catch {
+      Alert.alert('Update fehlgeschlagen', 'Bitte manuell von GitHub herunterladen.');
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  return (
+    <GlowCard style={[styles.updateBanner, { borderColor: theme.colors.primary }]}>
+      <View style={{ flex: 1 }}>
+        <ThemedText weight="bold" size="sm">🚀 Update verfügbar: {release.version}</ThemedText>
+        <ThemedText variant="muted" size="xs" style={{ marginTop: 2 }}>
+          {downloading ? `Herunterladen... ${progress}%` : 'Neue Version verfügbar'}
+        </ThemedText>
+      </View>
+      <View style={{ flexDirection: 'row', gap: 8 }}>
+        <TouchableOpacity
+          onPress={handleUpdate}
+          disabled={downloading}
+          style={[styles.updateBtn, { backgroundColor: theme.colors.primary, opacity: downloading ? 0.6 : 1 }]}
+          accessibilityLabel="Update installieren"
+        >
+          <Text style={{ color: theme.colors.background, fontWeight: 'bold', fontSize: 12 }}>
+            {downloading ? `${progress}%` : 'Update'}
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity onPress={onDismiss} accessibilityLabel="Update schließen">
+          <Text style={{ color: theme.colors.textMuted, fontSize: 18 }}>✕</Text>
+        </TouchableOpacity>
+      </View>
+    </GlowCard>
+  );
+}
+
 export default function DashboardScreen() {
   const { theme } = useTheme();
   const insets = useSafeAreaInsets();
   const { items, isLoading } = useItemStore();
+  const [updateRelease, setUpdateRelease] = useState<GitHubRelease | null>(null);
+
+  useEffect(() => {
+    checkForUpdate().then((release) => {
+      if (release) setUpdateRelease(release);
+    });
+  }, []);
 
   const handleRefresh = useCallback(async () => {
     // Price refresh is triggered manually - never auto-fetch
@@ -188,6 +259,13 @@ export default function DashboardScreen() {
           <Text style={[styles.addButtonText, { color: theme.colors.background }]}>+</Text>
         </TouchableOpacity>
       </View>
+
+      {/* Update banner */}
+      {updateRelease && (
+        <View style={styles.bannerContainer}>
+          <UpdateBanner release={updateRelease} onDismiss={() => setUpdateRelease(null)} />
+        </View>
+      )}
 
       {/* API cost banner (only when there were scans today) */}
       <View style={styles.bannerContainer}>
@@ -314,5 +392,17 @@ const styles = StyleSheet.create({
     marginTop: 24,
     paddingHorizontal: 28,
     paddingVertical: 14,
+  },
+  updateBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderWidth: 1,
+    marginBottom: 8,
+  },
+  updateBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
   },
 });
