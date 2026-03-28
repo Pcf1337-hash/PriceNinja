@@ -53,6 +53,13 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     eas: {
       projectId: 'price-ninja',
     },
+    // Credentials from .env — available in app via Constants.expoConfig.extra
+    claudeApiKey: process.env.CLAUDE_API_KEY ?? '',
+    ebayAppId: process.env.EBAY_APP_ID ?? '',
+    ebayCertId: process.env.EBAY_CERT_ID ?? '',
+    ebayClientSecret: process.env.EBAY_CLIENT_SECRET ?? '',
+    ebayRedirectUri: process.env.EBAY_REDIRECT_URI ?? 'priceninja://ebay-callback',
+    githubToken: process.env.GITHUB_TOKEN ?? '',
   },
   scheme: 'priceninja',
 });

@@ -1,4 +1,6 @@
 import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { TrackedItem, PricePoint } from '@/src/types/item';
 
 interface ItemState {
@@ -33,7 +35,9 @@ interface ItemState {
   getItemsDueForRefresh: () => TrackedItem[];
 }
 
-export const useItemStore = create<ItemState>((set, get) => ({
+export const useItemStore = create<ItemState>()(
+  persist(
+    (set, get) => ({
   items: [],
   isLoading: false,
   error: null,
@@ -105,4 +109,10 @@ export const useItemStore = create<ItemState>((set, get) => ({
       return now - lastUpdate > intervalMs;
     });
   },
-}));
+    }),
+    {
+      name: 'priceninja-items',
+      storage: createJSONStorage(() => AsyncStorage),
+    }
+  )
+);

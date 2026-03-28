@@ -1,5 +1,30 @@
 import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
 import { EbayAccount, EbayAccountType, EbayPermissions } from '@/src/types/ebay';
+
+const ENV = Constants.expoConfig?.extra ?? {};
+
+// Pre-build Papa eBay account from .env if credentials are present
+function buildEnvPapaAccount(): EbayAccount | null {
+  const appId = ENV.ebayAppId as string;
+  const certId = ENV.ebayCertId as string;
+  const clientSecret = ENV.ebayClientSecret as string;
+  if (!appId || !certId || !clientSecret) return null;
+  return {
+    type: 'papa',
+    username: 'Papa eBay',
+    appId,
+    certId,
+    clientSecret,
+    accessToken: '',
+    refreshToken: '',
+    tokenExpiresAt: '',
+    connectedAt: new Date().toISOString(),
+    isSandbox: false,
+  };
+}
 
 interface EbayState {
   papaAccount: EbayAccount | null;
@@ -28,10 +53,12 @@ interface EbayState {
   isConnected: () => boolean;
 }
 
-export const useEbayStore = create<EbayState>((set, get) => ({
-  papaAccount: null,
+export const useEbayStore = create<EbayState>()(
+  persist(
+    (set, get) => ({
+  papaAccount: buildEnvPapaAccount(),
   ownAccount: null,
-  activeAccountType: null,
+  activeAccountType: buildEnvPapaAccount() ? 'papa' : null,
   isConnecting: false,
   error: null,
 
@@ -116,4 +143,16 @@ export const useEbayStore = create<EbayState>((set, get) => ({
     const { papaAccount, ownAccount } = get();
     return papaAccount !== null || ownAccount !== null;
   },
-}));
+    }),
+    {
+      name: 'priceninja-ebay',
+      storage: createJSONStorage(() => AsyncStorage),
+      // Persist accounts and active type; skip transient state
+      partialize: (state) => ({
+        papaAccount: state.papaAccount,
+        ownAccount: state.ownAccount,
+        activeAccountType: state.activeAccountType,
+      }),
+    }
+  )
+);
