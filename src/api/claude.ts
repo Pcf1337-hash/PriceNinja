@@ -14,6 +14,16 @@ export interface ClaudeAlternative {
   searchQuery: string;
 }
 
+export interface ClaudeLegoInfo {
+  setNumber?: string;     // z.B. "75257"
+  theme?: string;         // z.B. "Star Wars"
+  subtheme?: string;      // z.B. "Ultimate Collector Series"
+  year?: number;          // Erscheinungsjahr
+  pieceCount?: number;    // Teileanzahl
+  minifigs?: string[];    // enthaltene Figuren
+  type?: 'set' | 'minifig' | 'moc'; // was wurde erkannt
+}
+
 export interface ClaudeItemResult {
   name: string;
   brand?: string;
@@ -26,6 +36,8 @@ export interface ClaudeItemResult {
   broadQuery?: string;           // generisch: "Samsung Galaxy S24"
   categoryId?: string;           // eBay Kategorie-ID wenn erkennbar
   alternatives?: ClaudeAlternative[];
+  isLegoOrBricks?: boolean;      // LEGO oder Klemmbausteine erkannt
+  lego?: ClaudeLegoInfo;
 }
 
 export interface ClaudeCardResult {
@@ -102,16 +114,23 @@ export async function identifyItem(
 ): Promise<ClaudeItemResult> {
   const base64 = await compressImage(imageUri);
 
-  const prompt = `Du bist ein Experte für Produkterkennung. Analysiere dieses Bild systematisch.
+  const prompt = `Du bist ein Experte für Produkterkennung und LEGO/Klemmbausteine. Analysiere dieses Bild systematisch.
 
 SCHRITT 1 - Beobachte: Was siehst du genau?
 - Welche Texte, Logos, Markennamen sind sichtbar?
 - Welche Modellnummern oder Produktcodes erkennst du?
 - Welche physischen Merkmale (Farbe, Form, Größe, Material)?
+- Sind LEGO-Steine, LEGO-Sets, LEGO-Verpackungen, LEGO-Figuren oder andere Klemmbausteine sichtbar?
 
 SCHRITT 2 - Identifiziere: Basiere die Identifikation NUR auf den Beobachtungen aus Schritt 1. Erfinde keine Details.
 
-SCHRITT 3 - Erstelle Suchanfragen:
+SCHRITT 3 - Falls LEGO/Klemmbausteine erkannt:
+- Setze isLegoOrBricks: true
+- Identifiziere das Set (Setname, Setnummer wie "75257", Theme wie "Star Wars")
+- Schätze Erscheinungsjahr, Teileanzahl und enthaltene Figuren aus deinem Wissen
+- Für searchQuery verwende: "LEGO {Setnummer} {Setname}" für bessere eBay-Treffer
+
+SCHRITT 4 - Erstelle Suchanfragen:
 - searchQuery: 3-6 Keywords, spezifisch (Marke + Modell + Schlüsselspezifikation). KEINE Adjektive.
 - alternativeQueries: 2-3 alternative Formulierungen (kürzer, anders betont)
 - broadQuery: Nur Marke + Kategorie, ohne Modelldetails
@@ -131,8 +150,22 @@ Antworte NUR mit diesem JSON (kein Markdown, kein Text):
   "alternatives": [
     { "name": "alternative 1", "category": "Kategorie", "confidence": 0.7, "searchQuery": "query 1" },
     { "name": "alternative 2", "category": "Kategorie", "confidence": 0.5, "searchQuery": "query 2" }
-  ]
+  ],
+  "isLegoOrBricks": false,
+  "lego": null
 }
+Falls LEGO/Klemmbausteine erkannt, ersetze die letzten zwei Felder:
+  "isLegoOrBricks": true,
+  "lego": {
+    "setNumber": "75257",
+    "theme": "Star Wars",
+    "subtheme": "null oder Unterthema",
+    "year": 2019,
+    "pieceCount": 1351,
+    "minifigs": ["Han Solo", "Chewbacca", "Rey Skywalker"],
+    "type": "set"
+  }
+Für Einzelfiguren type="minifig", für selbst gebaute MOCs type="moc" (dann setNumber null).
 Wenn du das Produkt nicht sicher identifizieren kannst, setze confidence < 0.5.`;
 
   const rawResponse = await callClaude(apiKey, base64, prompt);

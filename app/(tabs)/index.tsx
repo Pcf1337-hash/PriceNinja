@@ -58,12 +58,19 @@ function ItemCard({ item }: { item: TrackedItem }) {
           )}
 
           <View style={styles.itemInfo}>
-            <ThemedText weight="semibold" size="md" numberOfLines={2}>
-              {item.name}
-            </ThemedText>
-            {item.brand && (
+            <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 6 }}>
+              <ThemedText weight="semibold" size="md" numberOfLines={2} style={{ flex: 1 }}>
+                {item.name}
+              </ThemedText>
+              {item.isLegoOrBricks && (
+                <View style={{ backgroundColor: '#f5c518', borderRadius: 4, paddingHorizontal: 5, paddingVertical: 2, marginTop: 2 }}>
+                  <Text style={{ color: '#000', fontSize: 9, fontWeight: '800' }}>LEGO</Text>
+                </View>
+              )}
+            </View>
+            {(item.brand || item.legoTheme || item.legoSetNumber) && (
               <ThemedText variant="secondary" size="sm">
-                {item.brand}
+                {item.legoTheme ?? item.brand}{item.legoSetNumber ? ` · Set ${item.legoSetNumber}` : ''}
               </ThemedText>
             )}
 
@@ -82,6 +89,14 @@ function ItemCard({ item }: { item: TrackedItem }) {
                   <ThemedText variant="muted" size="xs">Geizhals</ThemedText>
                   <ThemedText weight="semibold" size="md">
                     {formatPrice(item.geizhalsCheapest)}
+                  </ThemedText>
+                </View>
+              ) : null}
+              {item.bricklinkAvg && item.bricklinkAvg > 0 ? (
+                <View style={styles.priceItem}>
+                  <ThemedText variant="muted" size="xs" style={{ color: '#e3000b99' }}>BL Ø</ThemedText>
+                  <ThemedText weight="semibold" size="md" style={{ color: '#e3000b' }}>
+                    {formatPrice(item.bricklinkAvg)}
                   </ThemedText>
                 </View>
               ) : null}
@@ -298,6 +313,7 @@ export default function DashboardScreen() {
   const insets = useSafeAreaInsets();
   const { items, isLoading } = useItemStore();
   const [updateRelease, setUpdateRelease] = useState<GitHubRelease | null>(null);
+  const [activeTab, setActiveTab] = useState<'items' | 'brix'>('items');
 
   useEffect(() => {
     checkForUpdate().then((release) => {
@@ -305,12 +321,11 @@ export default function DashboardScreen() {
     });
   }, []);
 
-  const handleRefresh = useCallback(async () => {
-    // Price refresh is triggered manually - never auto-fetch
-    // TODO: implement batch price refresh via useRefreshPrices hook
-  }, []);
+  const handleRefresh = useCallback(async () => {}, []);
 
-  const itemCountLabel = `${items.length} ${items.length === 1 ? 'Artikel' : 'Artikel'} getrackt`;
+  const itemsTab = items.filter(i => !i.isLegoOrBricks && !i.bricklinkUrl);
+  const brixTab = items.filter(i => i.isLegoOrBricks || !!i.bricklinkUrl);
+  const displayItems = activeTab === 'items' ? itemsTab : brixTab;
 
   return (
     <ThemedView style={[styles.container, { paddingTop: insets.top }]}>
@@ -318,24 +333,15 @@ export default function DashboardScreen() {
       <View style={[styles.header, { borderBottomColor: theme.colors.border }]}>
         <View style={styles.headerLeft}>
           <PriceNinjaLogo size="md" variant="default" />
-          <ThemedText
-            variant="muted"
-            size="xs"
-            style={{ marginTop: 4 }}
-          >
-            {itemCountLabel}
+          <ThemedText variant="muted" size="xs" style={{ marginTop: 4 }}>
+            {activeTab === 'items'
+              ? `${itemsTab.length} Artikel`
+              : `${brixTab.length} Sets`}
           </ThemedText>
         </View>
-
         <TouchableOpacity
           onPress={() => router.push('/scan-chooser')}
-          style={[
-            styles.addButton,
-            {
-              backgroundColor: theme.colors.primary,
-              borderRadius: 28,
-            },
-          ]}
+          style={[styles.addButton, { backgroundColor: theme.colors.primary, borderRadius: 28 }]}
           accessibilityLabel="Neuen Artikel scannen"
           activeOpacity={0.8}
         >
@@ -343,7 +349,35 @@ export default function DashboardScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Update modal — automatisch beim Start */}
+      {/* Tabs */}
+      <View style={[styles.tabRow, { borderBottomColor: theme.colors.border }]}>
+        <TouchableOpacity
+          onPress={() => setActiveTab('items')}
+          style={[styles.tab, activeTab === 'items' && { borderBottomColor: theme.colors.primary, borderBottomWidth: 2 }]}
+          accessibilityLabel="Artikel Tab"
+        >
+          <ThemedText
+            weight={activeTab === 'items' ? 'bold' : 'regular'}
+            style={{ color: activeTab === 'items' ? theme.colors.primary : theme.colors.textSecondary }}
+          >
+            📦 Artikel
+          </ThemedText>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={() => setActiveTab('brix')}
+          style={[styles.tab, activeTab === 'brix' && { borderBottomColor: '#f5c518', borderBottomWidth: 2 }]}
+          accessibilityLabel="Brix Tab"
+        >
+          <ThemedText
+            weight={activeTab === 'brix' ? 'bold' : 'regular'}
+            style={{ color: activeTab === 'brix' ? '#b8940a' : theme.colors.textSecondary }}
+          >
+            🧱 Brix {brixTab.length > 0 && `(${brixTab.length})`}
+          </ThemedText>
+        </TouchableOpacity>
+      </View>
+
+      {/* Update modal */}
       {updateRelease && (
         <UpdateModal release={updateRelease} onDismiss={() => setUpdateRelease(null)} />
       )}
@@ -357,14 +391,28 @@ export default function DashboardScreen() {
         />
       ) : (
         <FlatList
-          data={items}
+          data={displayItems}
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => <ItemCard item={item} />}
           contentContainerStyle={[
             styles.listContent,
-            items.length === 0 && styles.emptyContainer,
+            displayItems.length === 0 && styles.emptyContainer,
           ]}
-          ListEmptyComponent={<EmptyState />}
+          ListEmptyComponent={
+            activeTab === 'brix' ? (
+              <View style={styles.emptyState}>
+                <Text style={{ fontSize: 64 }}>🧱</Text>
+                <ThemedText weight="bold" size="xl" style={{ marginTop: 16, textAlign: 'center' }}>
+                  Noch keine LEGO-Sets
+                </ThemedText>
+                <ThemedText variant="secondary" style={{ marginTop: 8, textAlign: 'center' }}>
+                  Scanne ein LEGO-Set oder eine Figur — der Scanner erkennt es automatisch
+                </ThemedText>
+              </View>
+            ) : (
+              <EmptyState />
+            )
+          }
           refreshControl={
             <RefreshControl
               refreshing={isLoading}
@@ -407,6 +455,17 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     lineHeight: 32,
     marginTop: -2,
+  },
+  tabRow: {
+    flexDirection: 'row',
+    borderBottomWidth: 1,
+  },
+  tab: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 2,
+    borderBottomColor: 'transparent',
   },
   bannerContainer: {
     paddingHorizontal: 16,

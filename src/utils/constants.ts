@@ -1,4 +1,4 @@
-export const APP_VERSION = '1.8.0';
+export const APP_VERSION = '1.9.0';
 export const APP_NAME = 'PriceNinja';
 export const GITHUB_REPO = 'Pcf1337-hash/PriceNinja';
 

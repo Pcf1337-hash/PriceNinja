@@ -18,13 +18,19 @@ function buildGeizhalsSearchUrl(query: string): string {
   return `${GEIZHALS_BASE_URL}/?fs=${encoded}&in=&bl=1&v=e`;
 }
 
-function parseGeizhalsHTML(html: string, query: string): GeizhalsResult | null {
+function parseGeizhalsHTML(rawHtml: string, query: string): GeizhalsResult | null {
+  // Normalise HTML entities so regexes work reliably
+  const html = rawHtml
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&#160;/g, ' ')
+    .replace(/&euro;/g, '€')
+    .replace(/&#8364;/g, '€');
+
   // 1. JSON-LD — only @type "Product" with offers (skip WebSite, Organization, etc.)
   const jsonLdMatches = html.matchAll(/<script[^>]*type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi);
   for (const ldMatch of jsonLdMatches) {
     try {
       const raw = JSON.parse(ldMatch[1]) as Record<string, unknown>;
-      // Support both flat objects and @graph arrays
       const nodes: Record<string, unknown>[] = raw['@graph']
         ? (raw['@graph'] as Record<string, unknown>[])
         : Array.isArray(raw)
@@ -42,10 +48,7 @@ function parseGeizhalsHTML(html: string, query: string): GeizhalsResult | null {
               cheapestPrice: low,
               currency: String(offers.priceCurrency ?? 'EUR'),
               url: String(node.url ?? `${GEIZHALS_BASE_URL}/?fs=${encodeURIComponent(query)}`),
-              priceRange: {
-                min: low,
-                max: parseFloat(String(offers.highPrice ?? low)),
-              },
+              priceRange: { min: low, max: parseFloat(String(offers.highPrice ?? low)) },
               shopCount: typeof offers.offerCount === 'number' ? (offers.offerCount as number) : 1,
             };
           }
@@ -56,13 +59,12 @@ function parseGeizhalsHTML(html: string, query: string): GeizhalsResult | null {
     }
   }
 
-  // 2. schema.org itemprop="lowPrice" — Geizhals marks the cheapest price this way
-  //    First match = first (most relevant) product in results
-  const lowPriceMatch = html.match(
-    /itemprop="lowPrice"[^>]*content="([\d.]+)"|content="([\d.]+)"[^>]*itemprop="lowPrice"/i
+  // 2. schema.org itemprop="price" or "lowPrice" — first match = first (most relevant) product
+  const itempropMatch = html.match(
+    /content="([\d.]+)"[^>]*itemprop="(?:low)?[Pp]rice"|itemprop="(?:low)?[Pp]rice"[^>]*content="([\d.]+)"/i
   );
-  if (lowPriceMatch) {
-    const p = parseFloat(lowPriceMatch[1] ?? lowPriceMatch[2]);
+  if (itempropMatch) {
+    const p = parseFloat(itempropMatch[1] ?? itempropMatch[2]);
     if (p >= 1) {
       const nameMatch = html.match(/itemprop="name"[^>]*content="([^"]+)"|content="([^"]+)"[^>]*itemprop="name"/i);
       return {
@@ -76,9 +78,9 @@ function parseGeizhalsHTML(html: string, query: string): GeizhalsResult | null {
     }
   }
 
-  // 3. First "ab X,XX €" pattern — Geizhals uses this for the cheapest price per result entry
-  //    Take only the FIRST occurrence (first search result = most relevant)
-  const abMatch = html.match(/\bab\s+(?:€\s*)?([\d]+[,.][\d]{2})(?:\s*€)?/);
+  // 3. First "ab X,XX €" / "ab € X,XX" pattern (after &nbsp; normalisation above)
+  //    Matches: "ab 12,34 €"  "ab € 12,34"  "ab12,34€"
+  const abMatch = html.match(/\bab\s*(?:€\s*)?([\d]{1,4}[,.][\d]{2})(?:\s*€)?/);
   if (abMatch) {
     const p = parseFloat(abMatch[1].replace(',', '.'));
     if (p >= 1) {
@@ -93,7 +95,23 @@ function parseGeizhalsHTML(html: string, query: string): GeizhalsResult | null {
     }
   }
 
-  // No reliable price found — return null rather than guessing
+  // 4. Last resort: first standalone price >= 5 € near a product context
+  //    Only take the very first match to avoid picking up unrelated items
+  const firstPriceMatch = html.match(/(?<![.\d])([\d]{1,4}[,.][\d]{2})\s*€/);
+  if (firstPriceMatch) {
+    const p = parseFloat(firstPriceMatch[1].replace(',', '.'));
+    if (p >= 5) {
+      return {
+        productName: query,
+        cheapestPrice: p,
+        currency: 'EUR',
+        url: `${GEIZHALS_BASE_URL}/?fs=${encodeURIComponent(query)}`,
+        priceRange: { min: p, max: p },
+        shopCount: 1,
+      };
+    }
+  }
+
   return null;
 }
 

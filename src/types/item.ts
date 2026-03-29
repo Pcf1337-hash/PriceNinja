@@ -21,6 +21,9 @@ export interface TrackedItem extends ScannedItem {
   bricklinkAvg?: number;
   bricklinkMin?: number;
   bricklinkUrl?: string;
+  isLegoOrBricks?: boolean;
+  legoSetNumber?: string;
+  legoTheme?: string;
   lastPriceUpdate?: string;
   refreshInterval: 1 | 2 | 6 | 12 | 24; // hours
   priceHistory: PricePoint[];

@@ -10,6 +10,7 @@ import {
   TextInput,
   Image,
   Linking,
+  Modal,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -20,14 +21,13 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/src/theme';
 import { useItemStore, useSettingsStore } from '@/src/store';
 import { ThemedView, ThemedText, GlowCard, PrimaryButton } from '@/src/components/ui';
-import { identifyItem, ClaudeAlternative } from '@/src/api/claude';
+import { identifyItem, ClaudeAlternative, ClaudeItemResult } from '@/src/api/claude';
 import { fetchSoldListingsPublic } from '@/src/api/ebay';
 import { fetchGeizhalsPrice } from '@/src/api/geizhals';
 import { fetchBricklinkPrice, BricklinkResult } from '@/src/api/bricklink';
 import { calculatePriceStats, formatPrice } from '@/src/utils/pricing';
 import { SCAN_RATE_LIMIT } from '@/src/utils/constants';
 import { TrackedItem, EbaySoldListing } from '@/src/types/item';
-import { ClaudeItemResult } from '@/src/api/claude';
 import 'react-native-get-random-values';
 
 const SCAN_MESSAGES = [
@@ -149,6 +149,247 @@ function ImageCarousel({ images }: { images: string[] }) {
   );
 }
 
+// ─── LEGO Modal ────────────────────────────────────────────────────────────
+function LegoModal({
+  result,
+  bricklink,
+  ebaySoldAvg,
+  ebaySoldMin,
+  ebaySoldMax,
+  soldListings,
+  onDismiss,
+}: {
+  result: ClaudeItemResult;
+  bricklink?: BricklinkResult;
+  ebaySoldAvg?: number;
+  ebaySoldMin?: number;
+  ebaySoldMax?: number;
+  soldListings: EbaySoldListing[];
+  onDismiss: () => void;
+}) {
+  const { theme } = useTheme();
+  const lego = result.lego;
+  const setNumber = lego?.setNumber;
+  const isMoc = lego?.type === 'moc';
+  const isMinifig = lego?.type === 'minifig';
+
+  // Bricklink image CDN
+  const imageUrl = setNumber
+    ? isMinifig
+      ? `https://img.bricklink.com/ItemImage/MN/0/${setNumber}.png`
+      : `https://img.bricklink.com/ItemImage/SN/0/${setNumber}-1.png`
+    : bricklink?.itemId
+      ? `https://img.bricklink.com/ItemImage/${bricklink.type === 'M' ? 'MN' : 'SN'}/0/${bricklink.itemId}${bricklink.type !== 'M' ? '-1' : ''}.png`
+      : null;
+
+  const legoUrl = setNumber
+    ? `https://www.lego.com/de-de/search?q=${encodeURIComponent(setNumber)}`
+    : null;
+  const bricklinkUrl = bricklink?.url ?? (setNumber ? `https://www.bricklink.com/v2/catalog/catalogitem.page?S=${setNumber}-1` : null);
+
+  return (
+    <Modal visible animationType="slide" transparent onRequestClose={onDismiss}>
+      <View style={legoStyles.backdrop}>
+        <View style={[legoStyles.sheet, { backgroundColor: theme.colors.background, borderColor: theme.colors.border }]}>
+          {/* Header */}
+          <View style={[legoStyles.sheetHeader, { borderBottomColor: theme.colors.border }]}>
+            <View style={legoStyles.sheetTitleRow}>
+              <Text style={{ fontSize: 20 }}>🧱</Text>
+              <ThemedText weight="bold" size="lg" style={{ marginLeft: 8, flex: 1 }}>
+                {isMoc ? 'MOC erkannt' : isMinifig ? 'Minifigur erkannt' : 'LEGO Set erkannt'}
+              </ThemedText>
+            </View>
+            <TouchableOpacity onPress={onDismiss} accessibilityLabel="Schließen" hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+              <Text style={{ color: theme.colors.textSecondary, fontSize: 22, lineHeight: 24 }}>✕</Text>
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView contentContainerStyle={{ padding: 16, gap: 14, paddingBottom: 32 }} showsVerticalScrollIndicator={false}>
+            {/* Set image + basic info */}
+            <View style={[legoStyles.infoCard, { backgroundColor: theme.colors.surface, borderColor: '#f5c518' + '44' }]}>
+              {imageUrl && (
+                <Image
+                  source={{ uri: imageUrl }}
+                  style={legoStyles.setImage}
+                  resizeMode="contain"
+                />
+              )}
+              <View style={{ padding: 14 }}>
+                <ThemedText weight="bold" size="xl" style={{ lineHeight: 26 }}>{result.name}</ThemedText>
+                {setNumber && (
+                  <View style={[legoStyles.setNumberBadge, { backgroundColor: '#f5c518', }]}>
+                    <Text style={{ color: '#000', fontWeight: '800', fontSize: 13 }}>Set {setNumber}</Text>
+                  </View>
+                )}
+                {lego?.theme && (
+                  <ThemedText variant="secondary" style={{ marginTop: 4 }}>{lego.theme}{lego.subtheme ? ` · ${lego.subtheme}` : ''}</ThemedText>
+                )}
+
+                {/* Stats row */}
+                <View style={legoStyles.statsRow}>
+                  {lego?.year && (
+                    <View style={[legoStyles.statChip, { backgroundColor: theme.colors.surfaceAlt }]}>
+                      <ThemedText size="xs" variant="muted">📅</ThemedText>
+                      <ThemedText size="xs" weight="semibold" style={{ marginLeft: 4 }}>{lego.year}</ThemedText>
+                    </View>
+                  )}
+                  {lego?.pieceCount && (
+                    <View style={[legoStyles.statChip, { backgroundColor: theme.colors.surfaceAlt }]}>
+                      <ThemedText size="xs" variant="muted">🧱</ThemedText>
+                      <ThemedText size="xs" weight="semibold" style={{ marginLeft: 4 }}>{lego.pieceCount} Teile</ThemedText>
+                    </View>
+                  )}
+                  {lego?.minifigs && lego.minifigs.length > 0 && (
+                    <View style={[legoStyles.statChip, { backgroundColor: theme.colors.surfaceAlt }]}>
+                      <ThemedText size="xs" variant="muted">👤</ThemedText>
+                      <ThemedText size="xs" weight="semibold" style={{ marginLeft: 4 }}>{lego.minifigs.length} Figuren</ThemedText>
+                    </View>
+                  )}
+                </View>
+
+                {/* Minifigs list */}
+                {lego?.minifigs && lego.minifigs.length > 0 && (
+                  <View style={{ marginTop: 8 }}>
+                    <ThemedText variant="muted" size="xs" weight="semibold" style={{ letterSpacing: 1, marginBottom: 4 }}>ENTHALTENE FIGUREN</ThemedText>
+                    <ThemedText variant="secondary" size="sm">{lego.minifigs.join(' · ')}</ThemedText>
+                  </View>
+                )}
+              </View>
+            </View>
+
+            {/* Price row: eBay + Bricklink */}
+            <View style={{ flexDirection: 'row', gap: 10 }}>
+              {/* eBay */}
+              <TouchableOpacity
+                style={[legoStyles.priceBlock, { backgroundColor: theme.colors.surface, borderColor: ebaySoldAvg ? theme.colors.primary + '55' : theme.colors.border, flex: 1 }]}
+                onPress={() => {
+                  const q = setNumber ? `LEGO ${setNumber}` : result.searchQuery;
+                  Linking.openURL(`https://www.ebay.de/sch/i.html?_nkw=${encodeURIComponent(q)}&LH_Sold=1`);
+                }}
+                activeOpacity={0.75}
+              >
+                <View style={[legoStyles.priceTag, { backgroundColor: theme.colors.primary + '22' }]}>
+                  <ThemedText size="xs" weight="bold" style={{ color: theme.colors.primary }}>eBay VERKAUFT</ThemedText>
+                </View>
+                {ebaySoldAvg ? (
+                  <>
+                    <ThemedText weight="bold" style={[legoStyles.priceValue, { color: theme.colors.primary }]}>
+                      {formatPrice(ebaySoldAvg)}
+                    </ThemedText>
+                    <ThemedText variant="muted" size="xs">Ø Verkaufspreis</ThemedText>
+                    {ebaySoldMin && ebaySoldMax && (
+                      <ThemedText variant="muted" size="xs" style={{ marginTop: 2 }}>
+                        {formatPrice(ebaySoldMin)} – {formatPrice(ebaySoldMax)}
+                      </ThemedText>
+                    )}
+                    <ThemedText size="xs" style={{ color: theme.colors.primary, marginTop: 4 }}>→ ebay.de</ThemedText>
+                  </>
+                ) : (
+                  <ThemedText variant="muted" size="xs" style={{ marginTop: 6 }}>Keine Daten</ThemedText>
+                )}
+              </TouchableOpacity>
+
+              {/* Bricklink */}
+              <TouchableOpacity
+                style={[legoStyles.priceBlock, { backgroundColor: theme.colors.surface, borderColor: '#e3000b44', flex: 1 }]}
+                onPress={() => bricklinkUrl && Linking.openURL(bricklinkUrl)}
+                activeOpacity={0.75}
+              >
+                <View style={[legoStyles.priceTag, { backgroundColor: '#e3000b22' }]}>
+                  <ThemedText size="xs" weight="bold" style={{ color: '#e3000b' }}>BRICKLINK</ThemedText>
+                </View>
+                {bricklink && bricklink.avgPrice > 0 ? (
+                  <>
+                    <ThemedText weight="bold" style={[legoStyles.priceValue, { color: '#e3000b' }]}>
+                      {formatPrice(bricklink.avgPrice)}
+                    </ThemedText>
+                    <ThemedText variant="muted" size="xs">Ø Marktpreis</ThemedText>
+                    {bricklink.minPrice > 0 && (
+                      <ThemedText variant="muted" size="xs" style={{ marginTop: 2 }}>ab {formatPrice(bricklink.minPrice)}</ThemedText>
+                    )}
+                    <ThemedText size="xs" style={{ color: '#e3000b', marginTop: 4 }}>→ bricklink.com</ThemedText>
+                  </>
+                ) : (
+                  <>
+                    <ThemedText variant="muted" size="xs" style={{ marginTop: 6 }}>
+                      {bricklink ? 'Keine Preisdaten' : 'Nicht gefunden'}
+                    </ThemedText>
+                    {bricklinkUrl && (
+                      <ThemedText size="xs" style={{ color: '#e3000b', marginTop: 4 }}>→ bricklink.com</ThemedText>
+                    )}
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+
+            {/* Official LEGO link */}
+            {legoUrl && (
+              <TouchableOpacity
+                onPress={() => Linking.openURL(legoUrl)}
+                style={[legoStyles.linkBtn, { backgroundColor: '#006DB7' + '18', borderColor: '#006DB7' + '55' }]}
+                activeOpacity={0.75}
+              >
+                <Text style={{ fontSize: 16 }}>🏗️</Text>
+                <ThemedText weight="semibold" size="sm" style={{ color: '#006DB7', marginLeft: 10, flex: 1 }}>
+                  Auf LEGO.com suchen
+                </ThemedText>
+                <Text style={{ color: '#006DB7' }}>→</Text>
+              </TouchableOpacity>
+            )}
+
+            {/* Recent eBay listings */}
+            {soldListings.length > 0 && (
+              <View style={[legoStyles.infoCard, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}>
+                <View style={{ padding: 14 }}>
+                  <ThemedText variant="muted" size="xs" weight="semibold" style={{ letterSpacing: 1, marginBottom: 8 }}>
+                    LETZTE VERKÄUFE ({soldListings.length})
+                  </ThemedText>
+                  {soldListings.slice(0, 5).map((l, i) => (
+                    <TouchableOpacity
+                      key={i}
+                      onPress={() => l.url && Linking.openURL(l.url)}
+                      style={[legoStyles.listingRow, { borderTopColor: theme.colors.border }, i === 0 && { borderTopWidth: 0 }]}
+                    >
+                      {l.imageUrl ? (
+                        <Image source={{ uri: l.imageUrl }} style={{ width: 40, height: 40, borderRadius: 6, marginRight: 8 }} resizeMode="cover" />
+                      ) : (
+                        <View style={{ width: 40, height: 40, borderRadius: 6, backgroundColor: theme.colors.surfaceAlt, marginRight: 8 }} />
+                      )}
+                      <ThemedText size="xs" variant="secondary" style={{ flex: 1 }} numberOfLines={2}>{l.title}</ThemedText>
+                      <View style={[legoStyles.priceBadge, { backgroundColor: theme.colors.success + '18', borderColor: theme.colors.success + '44' }]}>
+                        <ThemedText size="xs" weight="bold" style={{ color: theme.colors.success }}>{formatPrice(l.price)}</ThemedText>
+                      </View>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+            )}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+const legoStyles = StyleSheet.create({
+  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
+  sheet: { maxHeight: '92%', borderTopLeftRadius: 24, borderTopRightRadius: 24, borderWidth: 1, overflow: 'hidden' },
+  sheetHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderBottomWidth: 1 },
+  sheetTitleRow: { flexDirection: 'row', alignItems: 'center', flex: 1 },
+  infoCard: { borderWidth: 1.5, borderRadius: 16, overflow: 'hidden' },
+  setImage: { width: '100%', height: 200, backgroundColor: '#f8f8f8' },
+  setNumberBadge: { alignSelf: 'flex-start', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3, marginTop: 6 },
+  statsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
+  statChip: { flexDirection: 'row', alignItems: 'center', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
+  priceBlock: { borderWidth: 1.5, borderRadius: 14, padding: 14 },
+  priceTag: { alignSelf: 'flex-start', borderRadius: 5, paddingHorizontal: 7, paddingVertical: 3, marginBottom: 8 },
+  priceValue: { fontSize: 22, lineHeight: 26, fontWeight: '800', marginBottom: 2 },
+  linkBtn: { flexDirection: 'row', alignItems: 'center', borderWidth: 1.5, borderRadius: 14, padding: 14 },
+  listingRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 7, borderTopWidth: StyleSheet.hairlineWidth },
+  priceBadge: { borderWidth: 1, borderRadius: 6, paddingHorizontal: 7, paddingVertical: 3, marginLeft: 6 },
+});
+
+// ─── Scan Screen ───────────────────────────────────────────────────────────
 export default function ScanScreen() {
   const { theme } = useTheme();
   const insets = useSafeAreaInsets();
@@ -164,6 +405,7 @@ export default function ScanScreen() {
   const [lastScannedBarcode, setLastScannedBarcode] = useState<string | null>(null);
   const [scannedItemName, setScannedItemName] = useState<string | null>(null);
   const [scanningMessage, setScanningMessage] = useState('');
+  const [legoModalOpen, setLegoModalOpen] = useState(false);
   const cameraRef = useRef<CameraView>(null);
   const { claudeApiKey, scanStats, incrementScanCount } = useSettingsStore();
   const { addItem } = useItemStore();
@@ -305,6 +547,10 @@ export default function ScanScreen() {
           : null
       );
       setScanState('prices-ready');
+      // Auto-open LEGO modal when bricks detected
+      if (claudeResult.isLegoOrBricks) {
+        setLegoModalOpen(true);
+      }
     } catch {
       setScanState('confirming');
       Alert.alert('Preisabfrage fehlgeschlagen', 'Preise konnten nicht abgerufen werden.');
@@ -357,6 +603,9 @@ export default function ScanScreen() {
       bricklinkAvg: scanResult.bricklink?.avgPrice,
       bricklinkMin: scanResult.bricklink?.minPrice,
       bricklinkUrl: scanResult.bricklink?.url,
+      isLegoOrBricks: scanResult.claudeResult.isLegoOrBricks ?? false,
+      legoSetNumber: scanResult.claudeResult.lego?.setNumber,
+      legoTheme: scanResult.claudeResult.lego?.theme,
       lastPriceUpdate: now,
       refreshInterval: 6,
       isFavorite: false,
@@ -378,6 +627,7 @@ export default function ScanScreen() {
     setScanResult(null);
     setEditedName('');
     setEditedSearchQuery('');
+    setLegoModalOpen(false);
     if (textMode) {
       setTextMode(false);
       setTextQuery('');
@@ -817,6 +1067,22 @@ export default function ScanScreen() {
                 </TouchableOpacity>
               )}
 
+              {/* ── LEGO Details Button ── */}
+              {scanResult.claudeResult.isLegoOrBricks && (
+                <TouchableOpacity
+                  onPress={() => setLegoModalOpen(true)}
+                  style={[styles.legoBtn, { backgroundColor: '#f5c518' + '18', borderColor: '#f5c518' + '88' }]}
+                  activeOpacity={0.75}
+                  accessibilityLabel="LEGO Details öffnen"
+                >
+                  <Text style={{ fontSize: 18 }}>🧱</Text>
+                  <ThemedText weight="bold" style={{ color: '#b8940a', marginLeft: 10, flex: 1 }}>
+                    LEGO Details & Bricklink
+                  </ThemedText>
+                  <Text style={{ color: '#b8940a', fontSize: 16 }}>→</Text>
+                </TouchableOpacity>
+              )}
+
               {/* ── Price Range Bar ── */}
               {scanResult.ebaySoldAvg && scanResult.ebaySoldMin && scanResult.ebaySoldMax && scanResult.ebaySoldMin !== scanResult.ebaySoldMax && (
                 <GlowCard style={styles.resultCard}>
@@ -960,6 +1226,19 @@ export default function ScanScreen() {
             )}
           </View>
         </ScrollView>
+      )}
+
+      {/* LEGO Modal */}
+      {legoModalOpen && scanResult && (
+        <LegoModal
+          result={scanResult.claudeResult}
+          bricklink={scanResult.bricklink}
+          ebaySoldAvg={scanResult.ebaySoldAvg}
+          ebaySoldMin={scanResult.ebaySoldMin}
+          ebaySoldMax={scanResult.ebaySoldMax}
+          soldListings={scanResult.soldListings}
+          onDismiss={() => setLegoModalOpen(false)}
+        />
       )}
     </ThemedView>
   );
@@ -1231,5 +1510,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 14,
     fontSize: 16,
+  },
+  legoBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderRadius: 14,
+    padding: 14,
   },
 });
