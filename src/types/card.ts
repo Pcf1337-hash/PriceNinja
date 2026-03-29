@@ -24,4 +24,6 @@ export interface CardPrices {
   tcgplayerMid?: number;
   currency: string;
   updatedAt: string;
+  cardmarketUrl?: string;
+  cardImageUrl?: string;
 }

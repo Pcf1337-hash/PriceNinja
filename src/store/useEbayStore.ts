@@ -6,25 +6,12 @@ import { EbayAccount, EbayAccountType, EbayPermissions } from '@/src/types/ebay'
 
 const ENV = Constants.expoConfig?.extra ?? {};
 
-// Pre-build Papa eBay account from .env if credentials are present
-function buildEnvPapaAccount(): EbayAccount | null {
-  const appId = ENV.ebayAppId as string;
-  const certId = ENV.ebayCertId as string;
-  const ruName = ENV.ebayRuName as string;
-  if (!appId || !certId || !ruName) return null;
-  return {
-    type: 'papa',
-    username: 'Papa eBay',
-    appId,
-    certId,
-    ruName,
-    accessToken: '',
-    refreshToken: '',
-    tokenExpiresAt: '',
-    connectedAt: new Date().toISOString(),
-    isSandbox: false,
-  };
-}
+// Env-Credentials sind im App-Build drin — werden beim Login-Wizard automatisch genutzt
+// Kein Pre-Build-Account mehr: Account wird erst nach erfolgreichem OAuth-Login gesetzt
+const ENV_APP_ID = ENV.ebayAppId as string;
+const ENV_CERT_ID = ENV.ebayCertId as string;
+const ENV_RU_NAME = ENV.ebayRuName as string;
+export { ENV_APP_ID, ENV_CERT_ID, ENV_RU_NAME };
 
 interface EbayState {
   papaAccount: EbayAccount | null;
@@ -56,9 +43,9 @@ interface EbayState {
 export const useEbayStore = create<EbayState>()(
   persist(
     (set, get) => ({
-  papaAccount: buildEnvPapaAccount(),
+  papaAccount: null,
   ownAccount: null,
-  activeAccountType: buildEnvPapaAccount() ? 'papa' : null,
+  activeAccountType: null,
   isConnecting: false,
   error: null,
 

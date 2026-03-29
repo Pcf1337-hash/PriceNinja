@@ -21,7 +21,10 @@ export interface ClaudeItemResult {
   category: string;
   confidence: number;
   description: string;
-  searchQuery: string;
+  searchQuery: string;           // primary (specifisch: "Samsung Galaxy S24 Ultra 256GB")
+  alternativeQueries?: string[]; // 2-3 alternative Formulierungen
+  broadQuery?: string;           // generisch: "Samsung Galaxy S24"
+  categoryId?: string;           // eBay Kategorie-ID wenn erkennbar
   alternatives?: ClaudeAlternative[];
 }
 
@@ -61,6 +64,7 @@ async function callClaude(
     body: JSON.stringify({
       model: CLAUDE_MODEL,
       max_tokens: CLAUDE_MAX_TOKENS,
+      temperature: 0,
       messages: [
         {
           role: 'user',
@@ -98,22 +102,38 @@ export async function identifyItem(
 ): Promise<ClaudeItemResult> {
   const base64 = await compressImage(imageUri);
 
-  const prompt = `Analysiere dieses Bild und identifiziere den Gegenstand.
-Antworte NUR mit einem JSON-Objekt in diesem Format (kein Markdown, kein Text darum):
+  const prompt = `Du bist ein Experte für Produkterkennung. Analysiere dieses Bild systematisch.
+
+SCHRITT 1 - Beobachte: Was siehst du genau?
+- Welche Texte, Logos, Markennamen sind sichtbar?
+- Welche Modellnummern oder Produktcodes erkennst du?
+- Welche physischen Merkmale (Farbe, Form, Größe, Material)?
+
+SCHRITT 2 - Identifiziere: Basiere die Identifikation NUR auf den Beobachtungen aus Schritt 1. Erfinde keine Details.
+
+SCHRITT 3 - Erstelle Suchanfragen:
+- searchQuery: 3-6 Keywords, spezifisch (Marke + Modell + Schlüsselspezifikation). KEINE Adjektive.
+- alternativeQueries: 2-3 alternative Formulierungen (kürzer, anders betont)
+- broadQuery: Nur Marke + Kategorie, ohne Modelldetails
+
+Antworte NUR mit diesem JSON (kein Markdown, kein Text):
 {
   "name": "vollständiger Produktname",
   "brand": "Marke oder null",
   "model": "Modellnummer oder null",
-  "category": "Kategorie (z.B. Elektronik, Spielzeug, Kleidung)",
+  "category": "Kategorie",
   "confidence": 0.95,
   "description": "kurze Beschreibung auf Deutsch",
-  "searchQuery": "optimierter eBay-Suchbegriff",
+  "searchQuery": "Marke Modell Spezifikation",
+  "alternativeQueries": ["alternative 1", "alternative 2"],
+  "broadQuery": "Marke Kategorie",
+  "categoryId": "eBay Kategorie-ID wenn sicher erkennbar, sonst null",
   "alternatives": [
-    { "name": "alternative Bezeichnung 1", "category": "Kategorie", "confidence": 0.7, "searchQuery": "eBay-Suchbegriff 1" },
-    { "name": "alternative Bezeichnung 2", "category": "Kategorie", "confidence": 0.5, "searchQuery": "eBay-Suchbegriff 2" }
+    { "name": "alternative 1", "category": "Kategorie", "confidence": 0.7, "searchQuery": "query 1" },
+    { "name": "alternative 2", "category": "Kategorie", "confidence": 0.5, "searchQuery": "query 2" }
   ]
 }
-Gib immer 2 plausible Alternativen an, auch wenn du sehr sicher bist.`;
+Wenn du das Produkt nicht sicher identifizieren kannst, setze confidence < 0.5.`;
 
   const rawResponse = await callClaude(apiKey, base64, prompt);
 
@@ -132,19 +152,32 @@ export async function identifyCard(
 ): Promise<ClaudeCardResult> {
   const base64 = await compressImage(imageUri);
 
-  const prompt = `Analysiere diese Sammelkarte (Trading Card).
-Antworte NUR mit einem JSON-Objekt in diesem Format (kein Markdown):
+  const prompt = `You are a trading card expert. Analyze this trading card image carefully.
+
+IMPORTANT RULES:
+1. Read the card number printed at the BOTTOM of the card (e.g. "006/165", "025/102", "SWSH045"). This is the most reliable identifier.
+2. Read the set name/logo printed at the bottom or near the card number.
+3. If the card is in a non-English language (German: "Glurak"=Charizard, French, Spanish, etc.), return the ENGLISH name in the "name" field for database lookups. Put the localized name in "localName".
+4. For Pokémon: The card number like "006/165" means card #6 of 165 cards in that set.
+5. Look very carefully at the actual card name at the TOP — do not confuse artwork with card identity.
+
+Common German→English Pokémon names: Glurak=Charizard, Bisaflor=Venusaur, Turtok=Blastoise, Pikachu=Pikachu, Arktos=Articuno, Zapdos=Zapdos, Lavados=Moltres, Mewtwo=Mewtwo, Mew=Mew, Sonambaule=Hypno, Dragoran=Dragonite, Raupy=Caterpie, Gengar=Gengar, Relaxo=Snorlax, Glumanda=Charmander, Glutexo=Charmeleon, Schiggy=Squirtle, Bisasam=Bulbasaur.
+
+Respond ONLY with this JSON (no markdown, no extra text):
 {
-  "game": "pokemon|yugioh|magic|other",
-  "name": "Kartenname",
-  "setName": "Set-Name oder null",
-  "setCode": "Set-Code oder null",
-  "cardNumber": "Kartennummer oder null",
-  "rarity": "Seltenheit oder null",
-  "condition": "mint|near-mint|excellent|good|light-played|played|poor",
+  "game": "pokemon",
+  "name": "ENGLISH card name (for API lookup)",
+  "localName": "name as printed on card if non-English, else null",
+  "setName": "full set name as printed on card, or null",
+  "setCode": "set code/ID (e.g. 'sv3', 'base1', 'swsh12'), or null",
+  "cardNumber": "card number EXACTLY as printed (e.g. '006/165'), or null",
+  "rarity": "Common|Uncommon|Rare|Rare Holo|Ultra Rare|Secret Rare|etc, or null",
+  "condition": "M|NM|LP|MP|HP",
   "confidence": 0.95,
-  "searchQuery": "optimierter Cardmarket-Suchbegriff"
-}`;
+  "searchQuery": "English name + set for Cardmarket search"
+}
+
+Condition codes: M=Mint, NM=Near Mint, LP=Lightly Played, MP=Moderately Played, HP=Heavily Played.`;
 
   const rawResponse = await callClaude(apiKey, base64, prompt);
 
@@ -153,6 +186,21 @@ Antworte NUR mit einem JSON-Objekt in diesem Format (kein Markdown):
     throw new Error('Claude returned no valid JSON for card');
   }
 
-  const result = JSON.parse(jsonMatch[0]) as ClaudeCardResult;
+  const parsed = JSON.parse(jsonMatch[0]) as ClaudeCardResult & { localName?: string };
+
+  // If Claude returned a localized name but also an English name, prefer the English name
+  // for DB lookups but preserve display info
+  const result: ClaudeCardResult = {
+    game: parsed.game,
+    name: parsed.name,
+    setName: parsed.setName ?? undefined,
+    setCode: parsed.setCode ?? undefined,
+    cardNumber: parsed.cardNumber ?? undefined,
+    rarity: parsed.rarity ?? undefined,
+    condition: parsed.condition ?? undefined,
+    confidence: parsed.confidence,
+    searchQuery: parsed.searchQuery,
+  };
+
   return result;
 }

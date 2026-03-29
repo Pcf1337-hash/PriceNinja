@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   ScrollView,
@@ -6,9 +6,12 @@ import {
   TouchableOpacity,
   Alert,
   TextInput,
+  ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
+import * as FileSystem from 'expo-file-system';
+import * as IntentLauncher from 'expo-intent-launcher';
 import { useTheme } from '@/src/theme';
 import { useSettingsStore, CurrencyCode } from '@/src/store/useSettingsStore';
 import { useEbayStore } from '@/src/store/useEbayStore';
@@ -17,6 +20,8 @@ import { themes } from '@/src/theme/themes';
 import { ThemeId } from '@/src/theme/types';
 import { clearCache, getCacheSize } from '@/src/utils/cache';
 import { formatPrice } from '@/src/utils/pricing';
+import { checkForUpdate, GitHubRelease } from '@/src/api/github-updates';
+import { APP_VERSION } from '@/src/utils/constants';
 
 function SectionHeader({ title }: { title: string }) {
   const { theme } = useTheme();
@@ -67,6 +72,179 @@ function ThemeSelector() {
         </TouchableOpacity>
       ))}
     </ScrollView>
+  );
+}
+
+// ── Update Section ────────────────────────────────────────────────────────────
+type UpdateStatus = 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'ready';
+
+function UpdateSection() {
+  const { theme } = useTheme();
+  const [status, setStatus] = useState<UpdateStatus>('idle');
+  const [update, setUpdate] = useState<GitHubRelease | null>(null);
+  const [progress, setProgress] = useState(0);
+  const [localApkUri, setLocalApkUri] = useState<string | null>(null);
+
+  const handleCheck = useCallback(async () => {
+    setStatus('checking');
+    setUpdate(null);
+    setLocalApkUri(null);
+    const result = await checkForUpdate();
+    if (result) {
+      setUpdate(result);
+      setStatus('available');
+    } else {
+      setStatus('up-to-date');
+    }
+  }, []);
+
+  const handleDownload = useCallback(async () => {
+    if (!update) return;
+    setStatus('downloading');
+    setProgress(0);
+
+    const destUri = FileSystem.cacheDirectory + `PriceNinja-${update.version}.apk`;
+
+    const downloadResumable = FileSystem.createDownloadResumable(
+      update.apkUrl,
+      destUri,
+      {},
+      ({ totalBytesWritten, totalBytesExpectedToWrite }) => {
+        if (totalBytesExpectedToWrite > 0) {
+          setProgress(totalBytesWritten / totalBytesExpectedToWrite);
+        }
+      },
+    );
+
+    try {
+      const result = await downloadResumable.downloadAsync();
+      if (result?.uri) {
+        setLocalApkUri(result.uri);
+        setStatus('ready');
+      } else {
+        throw new Error('Download fehlgeschlagen');
+      }
+    } catch {
+      setStatus('available');
+      Alert.alert('Download fehlgeschlagen', 'Bitte versuche es erneut.');
+    }
+  }, [update]);
+
+  const handleInstall = useCallback(async () => {
+    if (!localApkUri) return;
+    try {
+      const contentUri = await FileSystem.getContentUriAsync(localApkUri);
+      await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
+        data: contentUri,
+        flags: 1, // FLAG_GRANT_READ_URI_PERMISSION
+        type: 'application/vnd.android.package-archive',
+      });
+    } catch {
+      Alert.alert('Installation fehlgeschlagen', 'Öffne die APK-Datei manuell aus dem Download-Ordner.');
+    }
+  }, [localApkUri]);
+
+  const progressPct = Math.round(progress * 100);
+
+  return (
+    <GlowCard>
+      {/* Version row */}
+      <View style={styles.statRow}>
+        <ThemedText variant="secondary">Aktuelle Version</ThemedText>
+        <ThemedText weight="bold">v{APP_VERSION}</ThemedText>
+      </View>
+
+      {/* Update available info */}
+      {update && (
+        <View style={[styles.updateBanner, { backgroundColor: theme.colors.primary + '18', borderColor: theme.colors.primary + '44' }]}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+            <ThemedText weight="bold" style={{ color: theme.colors.primary }}>
+              🚀 Update verfügbar
+            </ThemedText>
+            <ThemedText weight="bold" style={{ color: theme.colors.primary }}>
+              {update.version}
+            </ThemedText>
+          </View>
+          {update.releaseNotes ? (
+            <ThemedText variant="muted" size="xs" style={{ marginTop: 4 }} numberOfLines={4}>
+              {update.releaseNotes.replace(/#{1,3} /g, '').trim()}
+            </ThemedText>
+          ) : null}
+          {update.apkSize > 0 && (
+            <ThemedText variant="muted" size="xs" style={{ marginTop: 2 }}>
+              {(update.apkSize / 1024 / 1024).toFixed(1)} MB
+            </ThemedText>
+          )}
+        </View>
+      )}
+
+      {/* Download progress bar */}
+      {status === 'downloading' && (
+        <View style={[styles.progressBar, { backgroundColor: theme.colors.border }]}>
+          <View
+            style={[
+              styles.progressFill,
+              { backgroundColor: theme.colors.primary, width: `${progressPct}%` as `${number}%` },
+            ]}
+          />
+        </View>
+      )}
+      {status === 'downloading' && (
+        <ThemedText variant="muted" size="xs" style={{ textAlign: 'center', marginTop: 4 }}>
+          Lade herunter... {progressPct}%
+        </ThemedText>
+      )}
+
+      {/* Status text */}
+      {status === 'up-to-date' && (
+        <ThemedText variant="success" size="sm" style={{ marginTop: 8, textAlign: 'center' }}>
+          ✓ App ist aktuell
+        </ThemedText>
+      )}
+      {status === 'ready' && (
+        <ThemedText size="sm" style={{ marginTop: 8, textAlign: 'center', color: theme.colors.primary }}>
+          ✓ Download abgeschlossen — tippe Installieren
+        </ThemedText>
+      )}
+
+      {/* Action buttons */}
+      <View style={{ marginTop: 12, gap: 8 }}>
+        {(status === 'idle' || status === 'up-to-date') && (
+          <PrimaryButton
+            title="Nach Updates suchen"
+            variant="outline"
+            onPress={handleCheck}
+          />
+        )}
+        {status === 'checking' && (
+          <View style={{ flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 10, paddingVertical: 8 }}>
+            <ActivityIndicator size="small" color={theme.colors.primary} />
+            <ThemedText variant="secondary" size="sm">Suche nach Updates...</ThemedText>
+          </View>
+        )}
+        {status === 'available' && (
+          <PrimaryButton
+            title={`⬇ Herunterladen (${update ? (update.apkSize / 1024 / 1024).toFixed(1) + ' MB' : '...'})`}
+            onPress={handleDownload}
+          />
+        )}
+        {status === 'downloading' && (
+          <PrimaryButton title="Wird heruntergeladen..." variant="outline" onPress={() => {}} />
+        )}
+        {status === 'ready' && (
+          <PrimaryButton title="📦 Installieren" onPress={handleInstall} />
+        )}
+        {(status === 'available' || status === 'ready') && (
+          <PrimaryButton
+            title="Nochmal prüfen"
+            variant="outline"
+            size="sm"
+            onPress={handleCheck}
+            style={{ opacity: 0.6 }}
+          />
+        )}
+      </View>
+    </GlowCard>
   );
 }
 
@@ -132,75 +310,70 @@ export default function SettingsScreen() {
 
         {/* Currency */}
         <SectionHeader title="Währung" />
-        <View style={{ paddingHorizontal: 20, gap: 16 }}>
-          <View>
-            <ThemedText size="sm" variant="secondary" style={{ marginBottom: 8 }}>
-              Primärwährung
-            </ThemedText>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10 }}>
-              {(['EUR', 'USD', 'GBP', 'CHF', 'JPY'] as CurrencyCode[]).map((c) => (
-                <TouchableOpacity
-                  key={c}
-                  onPress={() => setPrimaryCurrency(c)}
-                  accessibilityLabel={`Primärwährung ${c} wählen`}
-                  style={[
-                    styles.currencyChip,
-                    {
-                      backgroundColor: primaryCurrency === c ? theme.colors.surface : 'transparent',
-                      borderColor: primaryCurrency === c ? theme.colors.primary : theme.colors.border,
-                      borderWidth: primaryCurrency === c ? 2 : 1,
-                    },
-                  ]}
-                >
-                  <ThemedText
-                    size="sm"
-                    weight={primaryCurrency === c ? 'semibold' : 'normal'}
-                    style={{ color: primaryCurrency === c ? theme.colors.primary : theme.colors.text }}
-                  >
-                    {c}
-                  </ThemedText>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          </View>
-
-          <View>
-            <ThemedText size="sm" variant="secondary" style={{ marginBottom: 8 }}>
-              Zweitwährung
-            </ThemedText>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10 }}>
-              {(['Keine', 'EUR', 'USD', 'GBP', 'CHF', 'JPY'] as (CurrencyCode | 'Keine')[]).map((c) => {
-                const isSelected = c === 'Keine' ? secondaryCurrency === null : secondaryCurrency === c;
-                return (
+        <View style={{ paddingHorizontal: 20 }}>
+          <GlowCard>
+            {/* Primary */}
+            <View style={styles.currencyRow}>
+              <ThemedText size="xs" variant="muted" style={styles.currencyLabel}>PRIMÄR</ThemedText>
+              <View style={styles.currencyChips}>
+                {(['EUR', 'USD', 'GBP', 'CHF', 'JPY'] as CurrencyCode[]).map((c) => (
                   <TouchableOpacity
                     key={c}
-                    onPress={() => setSecondaryCurrency(c === 'Keine' ? null : c)}
-                    accessibilityLabel={`Zweitwährung ${c} wählen`}
+                    onPress={() => setPrimaryCurrency(c)}
+                    accessibilityLabel={`Primärwährung ${c}`}
                     style={[
                       styles.currencyChip,
-                      {
-                        backgroundColor: isSelected ? theme.colors.surface : 'transparent',
-                        borderColor: isSelected ? theme.colors.primary : theme.colors.border,
-                        borderWidth: isSelected ? 2 : 1,
-                      },
+                      primaryCurrency === c
+                        ? { backgroundColor: theme.colors.primary, borderColor: theme.colors.primary }
+                        : { backgroundColor: 'transparent', borderColor: theme.colors.border },
                     ]}
                   >
                     <ThemedText
-                      size="sm"
-                      weight={isSelected ? 'semibold' : 'normal'}
-                      style={{ color: isSelected ? theme.colors.primary : theme.colors.text }}
+                      size="xs"
+                      weight={primaryCurrency === c ? 'bold' : 'normal'}
+                      style={{ color: primaryCurrency === c ? theme.colors.background : theme.colors.textSecondary }}
                     >
                       {c}
                     </ThemedText>
                   </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-          </View>
+                ))}
+              </View>
+            </View>
 
-          <ThemedText variant="muted" size="xs">
-            Preise werden in beiden Währungen angezeigt
-          </ThemedText>
+            {/* Divider */}
+            <View style={[styles.currencyDivider, { backgroundColor: theme.colors.border }]} />
+
+            {/* Secondary */}
+            <View style={styles.currencyRow}>
+              <ThemedText size="xs" variant="muted" style={styles.currencyLabel}>ZWEIT</ThemedText>
+              <View style={styles.currencyChips}>
+                {(['–', 'EUR', 'USD', 'GBP', 'CHF', 'JPY'] as (CurrencyCode | '–')[]).map((c) => {
+                  const isSelected = c === '–' ? secondaryCurrency === null : secondaryCurrency === c;
+                  return (
+                    <TouchableOpacity
+                      key={c}
+                      onPress={() => setSecondaryCurrency(c === '–' ? null : c)}
+                      accessibilityLabel={`Zweitwährung ${c}`}
+                      style={[
+                        styles.currencyChip,
+                        isSelected
+                          ? { backgroundColor: theme.colors.primary, borderColor: theme.colors.primary }
+                          : { backgroundColor: 'transparent', borderColor: theme.colors.border },
+                      ]}
+                    >
+                      <ThemedText
+                        size="xs"
+                        weight={isSelected ? 'bold' : 'normal'}
+                        style={{ color: isSelected ? theme.colors.background : theme.colors.textSecondary }}
+                      >
+                        {c}
+                      </ThemedText>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+          </GlowCard>
         </View>
 
         {/* eBay Accounts */}
@@ -232,7 +405,7 @@ export default function SettingsScreen() {
                 <PrimaryButton
                   title="Verbinden"
                   size="sm"
-                  onPress={() => router.push('/ebay-wizard/account-type')}
+                  onPress={() => router.push('/ebay-wizard/welcome?accountType=papa')}
                 />
               )}
             </View>
@@ -262,7 +435,7 @@ export default function SettingsScreen() {
                 <PrimaryButton
                   title="Verbinden"
                   size="sm"
-                  onPress={() => router.push('/ebay-wizard/account-type')}
+                  onPress={() => router.push('/ebay-wizard/welcome?accountType=own')}
                 />
               )}
             </View>
@@ -274,7 +447,7 @@ export default function SettingsScreen() {
         <View style={{ paddingHorizontal: 20, gap: 12 }}>
           <GlowCard>
             <ThemedText size="sm" variant="secondary" style={{ marginBottom: 8 }}>
-              API-Key für Bild-Erkennung (Claude Haiku)
+              API-Key für Bild-Erkennung (Claude Sonnet)
             </ThemedText>
             <TextInput
               value={apiKeyInput}
@@ -301,25 +474,41 @@ export default function SettingsScreen() {
 
         {/* Scan Stats */}
         <SectionHeader title="Statistiken" />
-        <View style={{ paddingHorizontal: 20 }}>
+        <View style={{ paddingHorizontal: 20, gap: 12 }}>
           <GlowCard>
+            <ThemedText weight="semibold" size="sm" style={{ marginBottom: 8 }}>Artikel Scanner</ThemedText>
             <View style={styles.statRow}>
               <ThemedText variant="secondary">Scans heute</ThemedText>
               <ThemedText weight="bold">{scanStats.scansToday}</ThemedText>
             </View>
             <View style={styles.statRow}>
-              <ThemedText variant="secondary">Scans diese Stunde</ThemedText>
-              <ThemedText weight="bold">{scanStats.scansThisHour} / 30</ThemedText>
-            </View>
-            <View style={styles.statRow}>
               <ThemedText variant="secondary">Gesamte Scans</ThemedText>
               <ThemedText weight="bold">{scanStats.totalScans}</ThemedText>
             </View>
+          </GlowCard>
+          <GlowCard>
+            <ThemedText weight="semibold" size="sm" style={{ marginBottom: 8 }}>Karten Scanner</ThemedText>
+            <View style={styles.statRow}>
+              <ThemedText variant="secondary">Card Scans heute</ThemedText>
+              <ThemedText weight="bold">{scanStats.cardScansToday}</ThemedText>
+            </View>
+            <View style={styles.statRow}>
+              <ThemedText variant="secondary">Gesamte Card Scans</ThemedText>
+              <ThemedText weight="bold">{scanStats.totalCardScans}</ThemedText>
+            </View>
+          </GlowCard>
+          <GlowCard>
             <View style={styles.statRow}>
               <ThemedText variant="secondary">Geschätzte API-Kosten heute</ThemedText>
               <ThemedText weight="bold">{formatPrice(scanStats.estimatedCostToday, 'USD')}</ThemedText>
             </View>
           </GlowCard>
+        </View>
+
+        {/* App Update */}
+        <SectionHeader title="App Update" />
+        <View style={{ paddingHorizontal: 20 }}>
+          <UpdateSection />
         </View>
 
         {/* Cache */}
@@ -382,9 +571,45 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingVertical: 6,
   },
+  currencyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 4,
+  },
+  currencyLabel: {
+    width: 44,
+    letterSpacing: 0.5,
+  },
+  currencyChips: {
+    flexDirection: 'row',
+    flex: 1,
+    flexWrap: 'wrap',
+    gap: 6,
+  },
   currencyChip: {
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 24,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  currencyDivider: {
+    height: StyleSheet.hairlineWidth,
+    marginVertical: 8,
+  },
+  updateBanner: {
+    marginTop: 10,
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  progressBar: {
+    height: 6,
+    borderRadius: 3,
+    marginTop: 10,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 3,
   },
 });

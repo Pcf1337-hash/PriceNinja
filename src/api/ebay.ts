@@ -1,4 +1,5 @@
 import * as SecureStore from 'expo-secure-store';
+import Constants from 'expo-constants';
 import {
   EBAY_PROD_BASE_URL,
   EBAY_SANDBOX_BASE_URL,
@@ -8,6 +9,10 @@ import {
 } from '@/src/utils/constants';
 import { EbayAccount, EbaySearchResult, EbayListingDraft } from '@/src/types/ebay';
 import { EbaySoldListing } from '@/src/types/item';
+
+const _ENV = Constants.expoConfig?.extra ?? {};
+const _ENV_APP_ID = _ENV.ebayAppId as string;
+const _ENV_CERT_ID = _ENV.ebayCertId as string;
 
 const SECURE_STORE_KEYS = {
   papa: 'ebay_papa_account',
@@ -33,16 +38,61 @@ export async function deleteEbayAccount(type: 'papa' | 'own'): Promise<void> {
   await SecureStore.deleteItemAsync(SECURE_STORE_KEYS[type]);
 }
 
-async function getValidToken(account: EbayAccount): Promise<string> {
-  const expiresAt = new Date(account.tokenExpiresAt).getTime();
-  if (Date.now() < expiresAt - 5 * 60 * 1000) {
-    return account.accessToken;
+// ─── Application Token (client_credentials) — für Browse API, kein User-Login nötig ─
+
+let _appTokenCache: { token: string; expiresAt: number } | null = null;
+
+async function getApplicationToken(appId: string, certId: string, isSandbox: boolean): Promise<string> {
+  const now = Date.now();
+  if (_appTokenCache && now < _appTokenCache.expiresAt - 60_000) {
+    return _appTokenCache.token;
   }
-  // Token expired — refresh it
-  return refreshToken(account);
+
+  const tokenUrl = isSandbox ? EBAY_SANDBOX_TOKEN_URL : EBAY_TOKEN_URL;
+  const credentials = btoa(`${appId}:${certId}`);
+
+  const response = await fetch(tokenUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Authorization: `Basic ${credentials}`,
+    },
+    body: new URLSearchParams({
+      grant_type: 'client_credentials',
+      scope: 'https://api.ebay.com/oauth/api_scope',
+    }).toString(),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Application token fetch failed: ${response.status}`);
+  }
+
+  const data = await response.json();
+  _appTokenCache = {
+    token: data.access_token,
+    expiresAt: now + (data.expires_in ?? 7200) * 1000,
+  };
+  return _appTokenCache.token;
 }
 
-async function refreshToken(account: EbayAccount): Promise<string> {
+// Für Browse API: Application Token reicht, kein User-Login nötig
+async function getBrowseToken(account: EbayAccount): Promise<string> {
+  return getApplicationToken(account.appId, account.certId, account.isSandbox);
+}
+
+// Für Sell API: User-OAuth-Token zwingend nötig
+async function getSellToken(account: EbayAccount): Promise<string> {
+  const expiresAt = account.tokenExpiresAt ? new Date(account.tokenExpiresAt).getTime() : 0;
+  if (account.accessToken && Date.now() < expiresAt - 5 * 60 * 1000) {
+    return account.accessToken;
+  }
+  if (!account.refreshToken) {
+    throw new Error('Nicht mit eBay angemeldet. Bitte im Wizard einloggen.');
+  }
+  return refreshUserToken(account);
+}
+
+async function refreshUserToken(account: EbayAccount): Promise<string> {
   const tokenUrl = account.isSandbox ? EBAY_SANDBOX_TOKEN_URL : EBAY_TOKEN_URL;
   const credentials = btoa(`${account.appId}:${account.certId}`);
 
@@ -82,7 +132,7 @@ export async function fetchSoldListings(
   limit = 10,
   categoryId?: string
 ): Promise<EbaySoldListing[]> {
-  const token = await getValidToken(account);
+  const token = await getBrowseToken(account);
   const baseUrl = account.isSandbox ? EBAY_SANDBOX_BASE_URL : EBAY_PROD_BASE_URL;
 
   const params = new URLSearchParams({
@@ -95,6 +145,51 @@ export async function fetchSoldListings(
 
   const response = await fetch(
     `${baseUrl}/buy/browse/v1/item_summary/search?${params}`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'X-EBAY-C-MARKETPLACE-ID': 'EBAY_DE',
+        'Accept-Language': 'de-DE',
+      },
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(`eBay Browse API error: ${response.status}`);
+  }
+
+  const data = await response.json();
+  const items = data.itemSummaries ?? [];
+
+  return items.map((item: Record<string, unknown>) => ({
+    title: item.title as string,
+    price: parseFloat((item.price as Record<string, string>)?.value ?? '0'),
+    currency: (item.price as Record<string, string>)?.currency ?? 'EUR',
+    soldDate: (item.itemEndDate as string) ?? new Date().toISOString(),
+    condition: (item.condition as string) ?? 'Unknown',
+    url: (item.itemWebUrl as string) ?? '',
+    imageUrl: ((item.image as Record<string, string>)?.imageUrl) ?? undefined,
+  }));
+}
+
+// ─── Public Price Lookup — no user account needed, uses baked-in app credentials ─
+
+export async function fetchSoldListingsPublic(
+  searchQuery: string,
+  limit = 10,
+  categoryId?: string
+): Promise<EbaySoldListing[]> {
+  const token = await getApplicationToken(_ENV_APP_ID, _ENV_CERT_ID, false);
+  const params = new URLSearchParams({
+    q: searchQuery,
+    limit: String(limit),
+    filter: 'buyingOptions:{FIXED_PRICE|AUCTION},conditionIds:{3000|4000|5000|6000}',
+  });
+  if (categoryId) params.set('category_ids', categoryId);
+
+  const response = await fetch(
+    `${EBAY_PROD_BASE_URL}/buy/browse/v1/item_summary/search?${params}`,
     {
       headers: {
         Authorization: `Bearer ${token}`,
@@ -171,7 +266,7 @@ export async function createEbayListing(
     throw new Error('Papa-Account kann keine Listings erstellen!');
   }
 
-  const token = await getValidToken(account);
+  const token = await getSellToken(account);
   const baseUrl = account.isSandbox ? EBAY_SANDBOX_BASE_URL : EBAY_PROD_BASE_URL;
 
   const body = {
@@ -241,7 +336,7 @@ export async function searchEbayByImage(
   base64Image: string,
   limit = 10
 ): Promise<EbaySoldListing[]> {
-  const token = await getValidToken(account);
+  const token = await getBrowseToken(account);
   const baseUrl = account.isSandbox ? EBAY_SANDBOX_BASE_URL : EBAY_PROD_BASE_URL;
 
   const response = await fetch(

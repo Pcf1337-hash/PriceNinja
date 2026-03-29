@@ -1,15 +1,25 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { View, StyleSheet, Text, TouchableOpacity } from 'react-native';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/src/theme';
 import { ThemedView, ThemedText, GlowCard, PrimaryButton } from '@/src/components/ui';
-import { getSelectedAccountType } from './account-type';
+import { getSelectedAccountType, setSelectedAccountType } from './account-type';
 
 export default function WelcomeScreen() {
   const { theme } = useTheme();
   const insets = useSafeAreaInsets();
-  const accountType = getSelectedAccountType();
+  const params = useLocalSearchParams<{ accountType?: string }>();
+
+  // If arriving directly from Settings with a pre-selected type, apply it
+  const accountType = useMemo(() => {
+    if (params.accountType === 'papa' || params.accountType === 'own') {
+      setSelectedAccountType(params.accountType);
+      return params.accountType;
+    }
+    return getSelectedAccountType();
+  }, [params.accountType]);
+
   const isPapa = accountType === 'papa';
 
   return (
@@ -18,7 +28,7 @@ export default function WelcomeScreen() {
         <TouchableOpacity onPress={() => router.back()} accessibilityLabel="Zurück">
           <Text style={{ color: theme.colors.textSecondary, fontSize: 16 }}>← Zurück</Text>
         </TouchableOpacity>
-        <ThemedText variant="muted" size="sm">Schritt 2 von 5</ThemedText>
+        <ThemedText variant="muted" size="sm">{params.accountType ? 'Schritt 1 von 3' : 'Schritt 2 von 4'}</ThemedText>
       </View>
 
       <View style={styles.content}>
@@ -41,17 +51,13 @@ export default function WelcomeScreen() {
           <View style={{ gap: 10 }}>
             <View style={{ flexDirection: 'row', gap: 10, alignItems: 'flex-start' }}>
               <Text style={{ color: theme.colors.primary }}>✓</Text>
-              <ThemedText variant="secondary">eBay Developer Account (kostenlos)</ThemedText>
-            </View>
-            <View style={{ flexDirection: 'row', gap: 10, alignItems: 'flex-start' }}>
-              <Text style={{ color: theme.colors.primary }}>✓</Text>
-              <ThemedText variant="secondary">App ID, Cert ID und Client Secret aus der eBay Developer Console</ThemedText>
-            </View>
-            <View style={{ flexDirection: 'row', gap: 10, alignItems: 'flex-start' }}>
-              <Text style={{ color: theme.colors.primary }}>✓</Text>
               <ThemedText variant="secondary">
-                {isPapa ? 'Papas eBay Login-Daten (zum Autorisieren der App)' : 'Deine eBay Login-Daten'}
+                {isPapa ? 'Papas eBay Login-Daten' : 'Deine eBay Login-Daten'}
               </ThemedText>
+            </View>
+            <View style={{ flexDirection: 'row', gap: 10, alignItems: 'flex-start' }}>
+              <Text style={{ color: theme.colors.primary }}>✓</Text>
+              <ThemedText variant="secondary">Fertig — keine API Keys nötig</ThemedText>
             </View>
           </View>
         </GlowCard>
@@ -70,7 +76,7 @@ export default function WelcomeScreen() {
       </View>
 
       <View style={[styles.footer, { paddingBottom: insets.bottom + 16 }]}>
-        <PrimaryButton title="Weiter: API Keys eingeben" onPress={() => router.push('/ebay-wizard/api-keys')} style={{ width: '100%' }} />
+        <PrimaryButton title="Weiter: eBay Login" onPress={() => router.push('/ebay-wizard/login')} style={{ width: '100%' }} />
       </View>
     </ThemedView>
   );

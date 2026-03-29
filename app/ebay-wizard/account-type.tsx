@@ -10,6 +10,7 @@ import { useEbayStore } from '@/src/store/useEbayStore';
 // Shared wizard state via module-level variable (simple, no extra deps)
 let selectedAccountType: 'papa' | 'own' = 'papa';
 export function getSelectedAccountType() { return selectedAccountType; }
+export function setSelectedAccountType(type: 'papa' | 'own') { selectedAccountType = type; }
 
 export default function AccountTypeScreen() {
   const { theme } = useTheme();

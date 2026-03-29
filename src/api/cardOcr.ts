@@ -9,7 +9,7 @@
  * Falls back to Claude (Tier 2) when this returns null or confidence < 0.7.
  */
 
-import TextRecognition from '@react-native-ml-kit/text-recognition';
+import TextRecognition, { TextRecognitionScript } from '@react-native-ml-kit/text-recognition';
 import { CardGame } from '@/src/types/card';
 
 export interface OcrCardMatch {
@@ -25,36 +25,43 @@ export interface OcrCardMatch {
   searchQuery: string;
 }
 
-// ── Game detection ────────────────────────────────────────────────────────────
+// ── Game detection (EN + DE + FR + IT + ES + PT) ─────────────────────────────
 
 function detectGame(text: string): CardGame | null {
   const t = text.toLowerCase();
 
   const isPokemon =
+    // English
     (t.includes('hp') && (t.includes('weakness') || t.includes('retreat') || t.includes('pokémon') || t.includes('pokemon'))) ||
-    t.includes('basic pokémon') ||
-    t.includes('stage 1') ||
-    t.includes('stage 2');
+    t.includes('basic pokémon') || t.includes('stage 1') || t.includes('stage 2') ||
+    // German
+    (t.includes('kp') && (t.includes('schwäche') || t.includes('rückzug') || t.includes('pokémon'))) ||
+    t.includes('basis-pokémon') || t.includes('basis pokémon') ||
+    t.includes('phase 1') || t.includes('phase 2') ||
+    // French
+    t.includes('pokémon de base') || t.includes('faiblesse') ||
+    // Spanish/Portuguese
+    t.includes('pokémon básico') ||
+    // Generic: card number pattern AND "pokémon" anywhere on the card
+    (t.includes('pokémon') && /\d{1,3}\s*\/\s*\d{1,3}/.test(t));
 
   const isYugioh =
-    t.includes('atk/') ||
-    t.includes('/atk') ||
-    t.includes('effect monster') ||
-    t.includes('spell card') ||
-    t.includes('trap card') ||
-    t.includes('fusion monster') ||
-    t.includes('synchro monster') ||
-    t.includes('xyz monster');
+    t.includes('atk/') || t.includes('/atk') ||
+    t.includes('effect monster') || t.includes('spell card') ||
+    t.includes('trap card') || t.includes('fusion monster') ||
+    t.includes('synchro monster') || t.includes('xyz monster') ||
+    // German Yu-Gi-Oh
+    t.includes('effektmonster') || t.includes('zauberkt') || t.includes('fallenkarte') ||
+    // Card code pattern like "SDMA-DE001"
+    /[a-z]{2,6}-[a-z]{2,3}\d{3}/.test(t);
 
   const isMagic =
-    !isPokemon &&
-    !isYugioh &&
-    (t.includes('enchantment') ||
-      t.includes('creature —') ||
-      t.includes('instant') ||
-      t.includes('sorcery') ||
-      t.includes('planeswalker') ||
-      t.includes('land') && t.includes('mana'));
+    !isPokemon && !isYugioh &&
+    (t.includes('enchantment') || t.includes('creature —') ||
+      t.includes('instant') || t.includes('sorcery') ||
+      t.includes('planeswalker') || (t.includes('land') && t.includes('mana')) ||
+      // German MTG
+      t.includes('verzauberung') || t.includes('spontanzauber') || t.includes('kreatur'));
 
   if (isPokemon) return 'pokemon';
   if (isYugioh) return 'yugioh';
@@ -68,29 +75,59 @@ function extractCardName(lines: string[]): string | null {
   // Card name is usually the first non-trivial line (not a number, not too short)
   for (const line of lines) {
     const clean = line.trim();
-    if (clean.length >= 3 && !/^\d+$/.test(clean) && !/^[\d/]+$/.test(clean)) {
-      return clean;
+    // Skip pure numbers, number/number patterns, very short strings, and known non-name lines
+    if (
+      clean.length < 3 ||
+      /^\d+$/.test(clean) ||
+      /^[\d/]+$/.test(clean) ||
+      /^kp\s*\d+/i.test(clean) ||
+      /^hp\s*\d+/i.test(clean) ||
+      /^\d+\s*hp/i.test(clean) ||
+      /^\d+\s*kp/i.test(clean)
+    ) {
+      continue;
     }
+    return clean;
   }
   return null;
 }
 
 function extractCardNumber(text: string, game: CardGame): { cardNumber?: string; setCode?: string } {
   if (game === 'pokemon') {
-    // e.g. "025/102" or "SWSH001"
+    // Modern format (Scarlet & Violet+): "13/198 SVI" — card number + set code on same line
+    const modernPattern = text.match(/(\d{1,4})\s*\/\s*(\d{1,4})\s+([A-Z]{2,4})/);
+    if (modernPattern) {
+      return {
+        cardNumber: `${modernPattern[1]}/${modernPattern[2]}`,
+        setCode: modernPattern[3].toLowerCase(),
+      };
+    }
+    // Classic: e.g. "025/102" or "025 / 165"
     const m = text.match(/(\d{1,3})\s*\/\s*(\d{1,3})/);
     if (m) return { cardNumber: m[0].replace(/\s/g, '') };
+    // Promo pattern e.g. "SWSH001"
+    const promo = text.match(/[A-Z]{2,6}\d{3}/);
+    if (promo) return { cardNumber: promo[0] };
   }
   if (game === 'yugioh') {
     // e.g. "SDMA-EN001", "LCKC-DE036"
-    const m = text.match(/[A-Z]{2,6}-[A-Z]{2,3}\d{3}/);
+    const m = text.match(/[A-Z]{2,6}-[A-Z]{2,3}\d{3}/i);
     if (m) {
-      const parts = m[0].split('-');
-      return { setCode: parts[0], cardNumber: m[0] };
+      const parts = m[0].toUpperCase().split('-');
+      return { setCode: parts[0], cardNumber: m[0].toUpperCase() };
     }
+    // Passcode: 8-digit number in bottom-left corner (language/print-independent)
+    const passcode = text.match(/\b(\d{8})\b/);
+    if (passcode) return { cardNumber: passcode[1] };
   }
   if (game === 'magic') {
-    // Collector number at bottom right, e.g. "123/300" → take "123"
+    // Modern collector number: "R 0034 • FDN • EN" or "C 0120 • MID • EN"
+    const modernMagic = text.match(/([CRUMSLT])\s+(\d{4})\s*[•★]\s*([A-Z]{3})/);
+    if (modernMagic) return { cardNumber: modernMagic[2], setCode: modernMagic[3].toLowerCase() };
+    // Classic with set code: "120/280 MID EN R"
+    const classic = text.match(/(\d{1,3})\s*\/\s*\d{1,3}\s+([A-Z]{3})/);
+    if (classic) return { cardNumber: classic[1], setCode: classic[2].toLowerCase() };
+    // Basic: collector number only
     const m = text.match(/(\d{1,3})\s*\/\s*\d{1,3}/);
     if (m) return { cardNumber: m[1] };
   }
@@ -99,27 +136,83 @@ function extractCardNumber(text: string, game: CardGame): { cardNumber?: string;
 
 // ── Free card DB lookups ──────────────────────────────────────────────────────
 
+interface PokemonApiCard {
+  name: string;
+  set?: { name: string; id: string };
+  number?: string;
+  rarity?: string;
+}
+
 async function lookupPokemon(
   name: string,
   cardNumber?: string,
+  setCode?: string,
+  pokemonApiKey?: string,
 ): Promise<Partial<OcrCardMatch> | null> {
+  const authHeaders: Record<string, string> = {
+    Accept: 'application/json',
+    ...(pokemonApiKey ? { 'X-Api-Key': pokemonApiKey } : {}),
+  };
+
   try {
+    // Strategy 0: direct ID lookup when we have both setCode and cardNumber (fastest, most precise)
+    if (setCode && cardNumber) {
+      const raw = cardNumber.split('/')[0];
+      const num = raw.replace(/^0+/, '') || raw;
+      const directRes = await fetch(
+        `https://api.pokemontcg.io/v2/cards/${setCode}-${num}`,
+        { headers: authHeaders },
+      );
+      if (directRes.ok) {
+        const directJson = (await directRes.json()) as { data?: PokemonApiCard };
+        const card = directJson.data;
+        if (card) {
+          return {
+            name: card.name,
+            setName: card.set?.name,
+            setCode: card.set?.id,
+            cardNumber: card.number,
+            rarity: card.rarity,
+            confidence: 0.97,
+          };
+        }
+      }
+    }
+
+    // Strategy 1: search by card number only (language-independent, most reliable)
+    if (cardNumber) {
+      const num = cardNumber.split('/')[0].replace(/^0+/, ''); // "006" → "6"
+      const res = await fetch(
+        `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(`number:${num}`)}&pageSize=5`,
+        { headers: authHeaders },
+      );
+      if (res.ok) {
+        const json = (await res.json()) as { data?: PokemonApiCard[] };
+        // Pick the card whose total matches (e.g. "006/165" → set with 165 total)
+        const card = json.data?.[0];
+        if (card) {
+          return {
+            name: card.name,
+            setName: card.set?.name,
+            setCode: card.set?.id,
+            cardNumber: card.number,
+            rarity: card.rarity,
+            confidence: 0.93,
+          };
+        }
+      }
+    }
+
+    // Strategy 2: search by name (English names only — OCR name may be localized)
     const q = cardNumber
       ? `name:"${name}" number:${cardNumber.split('/')[0]}`
       : `name:"${name}"`;
     const res = await fetch(
       `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(q)}&pageSize=1`,
-      { headers: { Accept: 'application/json' } },
+      { headers: authHeaders },
     );
     if (!res.ok) return null;
-    const json = (await res.json()) as {
-      data?: Array<{
-        name: string;
-        set?: { name: string; id: string };
-        number?: string;
-        rarity?: string;
-      }>;
-    };
+    const json = (await res.json()) as { data?: PokemonApiCard[] };
     const card = json.data?.[0];
     if (!card) return null;
     return {
@@ -128,7 +221,7 @@ async function lookupPokemon(
       setCode: card.set?.id,
       cardNumber: card.number,
       rarity: card.rarity,
-      confidence: 0.92,
+      confidence: 0.85,
     };
   } catch {
     return null;
@@ -200,12 +293,25 @@ async function lookupYugioh(name: string): Promise<Partial<OcrCardMatch> | null>
  * Identify a trading card image using on-device OCR + free card APIs.
  * Returns null if the card cannot be identified with sufficient confidence.
  * Caller should fall back to Claude Vision when this returns null.
+ *
+ * Runs two parallel OCR passes (Latin + Japanese) and picks whichever
+ * returns more text — this transparently handles JP/Asian language cards.
  */
-export async function identifyCardByOcr(imageUri: string): Promise<OcrCardMatch | null> {
+export async function identifyCardByOcr(
+  imageUri: string,
+  pokemonApiKey?: string,
+): Promise<OcrCardMatch | null> {
   let ocrText: string;
   try {
-    const result = await TextRecognition.recognize(imageUri);
-    ocrText = result.text;
+    const [latinResult, japaneseResult] = await Promise.allSettled([
+      TextRecognition.recognize(imageUri),
+      TextRecognition.recognize(imageUri, TextRecognitionScript.JAPANESE),
+    ]);
+
+    const latinText = latinResult.status === 'fulfilled' ? latinResult.value.text : '';
+    const japaneseText = japaneseResult.status === 'fulfilled' ? japaneseResult.value.text : '';
+    // Use Japanese result when it contains significantly more content (20 % threshold)
+    ocrText = japaneseText.length > latinText.length * 1.2 ? japaneseText : latinText;
   } catch {
     return null;
   }
@@ -223,7 +329,7 @@ export async function identifyCardByOcr(imageUri: string): Promise<OcrCardMatch 
 
   // Query the matching free API
   let dbMatch: Partial<OcrCardMatch> | null = null;
-  if (game === 'pokemon') dbMatch = await lookupPokemon(name, cardNumber);
+  if (game === 'pokemon') dbMatch = await lookupPokemon(name, cardNumber, setCode, pokemonApiKey);
   else if (game === 'magic') dbMatch = await lookupMagic(name, setCode);
   else if (game === 'yugioh') dbMatch = await lookupYugioh(name);
 

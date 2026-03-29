@@ -15,60 +15,86 @@ const PRICE_CACHE_TTL = 60 * 60 * 1000; // 1 hour
 
 // ── Pokémon TCG API ───────────────────────────────────────────────────────────
 
+interface PokemonTcgCard {
+  name?: string;
+  images?: { small?: string; large?: string };
+  cardmarket?: {
+    url?: string;
+    prices?: {
+      lowPrice?: number;
+      averageSellPrice?: number;
+      trendPrice?: number;
+    };
+  };
+  tcgplayer?: {
+    prices?: Record<string, { low?: number; market?: number } | undefined>;
+  };
+}
+
+function parsePokemonTcgCard(card: PokemonTcgCard): CardPrices {
+  const cm = card.cardmarket?.prices;
+  const tcgPrices = card.tcgplayer?.prices ?? {};
+  const variant =
+    tcgPrices['normal'] ??
+    tcgPrices['holofoil'] ??
+    tcgPrices['reverseHolofoil'] ??
+    null;
+  return {
+    cardmarketLow: cm?.lowPrice ?? undefined,
+    cardmarketMid: cm?.averageSellPrice ?? undefined,
+    cardmarketTrend: cm?.trendPrice ?? undefined,
+    tcgplayerLow: variant?.low ?? undefined,
+    tcgplayerMid: variant?.market ?? undefined,
+    currency: 'EUR',
+    updatedAt: new Date().toISOString(),
+    cardmarketUrl: card.cardmarket?.url ?? undefined,
+    cardImageUrl: card.images?.large ?? card.images?.small ?? undefined,
+  };
+}
+
 async function fetchPokemonPrices(
   name: string,
   setCode?: string,
   cardNumber?: string,
+  apiKey?: string,
 ): Promise<CardPrices | null> {
+  const authHeaders: Record<string, string> = {
+    Accept: 'application/json',
+    ...(apiKey ? { 'X-Api-Key': apiKey } : {}),
+  };
+
   try {
+    // Direct ID lookup when setCode + cardNumber are both known (faster, more accurate)
+    if (setCode && cardNumber) {
+      const raw = cardNumber.split('/')[0];
+      const num = raw.replace(/^0+/, '') || raw;
+      const directRes = await fetch(
+        `https://api.pokemontcg.io/v2/cards/${setCode}-${num}`,
+        { headers: authHeaders },
+      );
+      if (directRes.ok) {
+        const directJson = (await directRes.json()) as { data?: PokemonTcgCard };
+        if (directJson.data) {
+          return parsePokemonTcgCard(directJson.data);
+        }
+      }
+    }
+
     let q = `name:"${name}"`;
     if (setCode) q += ` set.id:${setCode}`;
     if (cardNumber) q += ` number:${cardNumber.split('/')[0]}`;
 
     const res = await fetch(
       `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(q)}&pageSize=1`,
-      { headers: { Accept: 'application/json' } },
+      { headers: authHeaders },
     );
     if (!res.ok) return null;
 
-    const json = (await res.json()) as {
-      data?: Array<{
-        cardmarket?: {
-          prices?: {
-            lowPrice?: number;
-            averageSellPrice?: number;
-            trendPrice?: number;
-          };
-        };
-        tcgplayer?: {
-          prices?: Record<
-            string,
-            { low?: number; market?: number } | undefined
-          >;
-        };
-      }>;
-    };
-
+    const json = (await res.json()) as { data?: PokemonTcgCard[] };
     const card = json.data?.[0];
     if (!card) return null;
 
-    const cm = card.cardmarket?.prices;
-    const tcgPrices = card.tcgplayer?.prices ?? {};
-    const variant =
-      tcgPrices['normal'] ??
-      tcgPrices['holofoil'] ??
-      tcgPrices['reverseHolofoil'] ??
-      null;
-
-    return {
-      cardmarketLow: cm?.lowPrice ?? undefined,
-      cardmarketMid: cm?.averageSellPrice ?? undefined,
-      cardmarketTrend: cm?.trendPrice ?? undefined,
-      tcgplayerLow: variant?.low ?? undefined,
-      tcgplayerMid: variant?.market ?? undefined,
-      currency: 'EUR',
-      updatedAt: new Date().toISOString(),
-    };
+    return parsePokemonTcgCard(card);
   } catch {
     return null;
   }
@@ -208,6 +234,7 @@ async function fetchCardmarketPrices(
 
 export async function fetchCardPrice(
   card: Pick<TradingCard, 'game' | 'name' | 'setCode' | 'cardNumber'>,
+  apiKey?: string,
 ): Promise<CardPrices | null> {
   const cacheKey = `prices_${card.game}_${card.name}_${card.setCode ?? ''}_${card.cardNumber ?? ''}`
     .toLowerCase()
@@ -219,19 +246,23 @@ export async function fetchCardPrice(
   let prices: CardPrices | null = null;
 
   if (card.game === 'pokemon') {
-    prices = await fetchPokemonPrices(card.name, card.setCode, card.cardNumber);
+    prices = await fetchPokemonPrices(card.name, card.setCode, card.cardNumber, apiKey);
   } else if (card.game === 'magic') {
     prices = await fetchMagicPrices(card.name, card.setCode);
   } else if (card.game === 'yugioh') {
     prices = await fetchYugiohPrices(card.name);
   }
 
-  // Last resort: Cardmarket scraping
+  // Last resort: Cardmarket scraping (rarely reached since all major APIs provide prices)
   if (!prices) {
     prices = await fetchCardmarketPrices(card);
   }
 
   if (prices) {
+    // Always attach a Cardmarket URL if not already set
+    if (!prices.cardmarketUrl) {
+      prices.cardmarketUrl = buildCardmarketUrl(card.game, card.name, card.setCode);
+    }
     await setCache(cacheKey, prices, PRICE_CACHE_TTL);
   }
   return prices;

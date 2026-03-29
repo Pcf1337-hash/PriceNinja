@@ -7,6 +7,7 @@ import {
   Text,
   TouchableOpacity,
   Alert,
+  Image,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
@@ -42,10 +43,18 @@ function ItemCard({ item }: { item: TrackedItem }) {
     >
       <GlowCard style={styles.itemCard}>
         <View style={styles.itemRow}>
-          {/* Image placeholder */}
-          <View style={[styles.imagePlaceholder, { backgroundColor: theme.colors.surfaceAlt, borderRadius: theme.radius.md }]}>
-            <Text style={{ color: theme.colors.textMuted, fontSize: 28 }}>📦</Text>
-          </View>
+          {/* Product image */}
+          {item.imageUri ? (
+            <Image
+              source={{ uri: item.imageUri }}
+              style={[styles.imagePlaceholder, { borderRadius: theme.radius.md }]}
+              resizeMode="cover"
+            />
+          ) : (
+            <View style={[styles.imagePlaceholder, { backgroundColor: theme.colors.surfaceAlt, borderRadius: theme.radius.md, alignItems: 'center', justifyContent: 'center' }]}>
+              <Text style={{ color: theme.colors.textMuted, fontSize: 28 }}>📦</Text>
+            </View>
+          )}
 
           <View style={styles.itemInfo}>
             <ThemedText weight="semibold" size="md" numberOfLines={2}>
@@ -268,11 +277,6 @@ export default function DashboardScreen() {
           <UpdateBanner release={updateRelease} onDismiss={() => setUpdateRelease(null)} />
         </View>
       )}
-
-      {/* API cost banner (only when there were scans today) */}
-      <View style={styles.bannerContainer}>
-        <ApiCostBanner />
-      </View>
 
       {isLoading && items.length === 0 ? (
         <FlatList

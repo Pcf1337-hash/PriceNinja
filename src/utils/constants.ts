@@ -1,13 +1,14 @@
-export const APP_VERSION = '1.5.0';
+export const APP_VERSION = '1.6.0';
 export const APP_NAME = 'PriceNinja';
 export const GITHUB_REPO = 'Pcf1337-hash/PriceNinja';
 
-export const SCAN_RATE_LIMIT = 150; // per hour (~300-400/day = 30-40ct mit Haiku)
+export const SCAN_RATE_LIMIT = 15; // per hour (~30-40/day = 30-40ct mit Sonnet à ~1ct/Scan)
+export const CARD_SCAN_RATE_LIMIT = 15; // per hour, same cost as item scans
 export const SCAN_RATE_WINDOW = 60 * 60 * 1000; // 1 hour in ms
 
 export const PRICE_CACHE_MIN_AGE = 60 * 60 * 1000; // 1 hour in ms
 
-export const CLAUDE_MODEL = 'claude-haiku-4-5-20251001';
+export const CLAUDE_MODEL = 'claude-sonnet-4-6';
 export const CLAUDE_API_URL = 'https://api.anthropic.com/v1/messages';
 export const CLAUDE_MAX_TOKENS = 1024;
 

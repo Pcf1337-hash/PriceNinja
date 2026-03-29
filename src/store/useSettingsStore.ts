@@ -15,12 +15,15 @@ interface ScanStats {
   scansToday: number;
   scansThisHour: number;
   estimatedCostToday: number;
+  cardScansToday: number;
+  totalCardScans: number;
 }
 
 interface SettingsState {
   themeId: ThemeId;
   defaultRefreshInterval: RefreshInterval;
   claudeApiKey: string;
+  pokemonTcgApiKey: string;
   language: 'de' | 'en';
   scanStats: ScanStats;
   cacheSize: number;
@@ -33,10 +36,12 @@ interface SettingsState {
   setTheme: (themeId: ThemeId) => void;
   setDefaultRefreshInterval: (interval: RefreshInterval) => void;
   setClaudeApiKey: (key: string) => void;
+  setPokemonTcgApiKey: (key: string) => void;
   setLanguage: (lang: 'de' | 'en') => void;
   updateScanStats: (stats: Partial<ScanStats>) => void;
   setCacheSize: (size: number) => void;
   incrementScanCount: () => void;
+  incrementCardScanCount: () => void;
   setLastUpdateCheck: (date: string) => void;
   setPrimaryCurrency: (c: CurrencyCode) => void;
   setSecondaryCurrency: (c: CurrencyCode | null) => void;
@@ -49,12 +54,15 @@ export const useSettingsStore = create<SettingsState>()(
       defaultRefreshInterval: 6,
       // Use env key as default — user can override in Settings
       claudeApiKey: (ENV.claudeApiKey as string) || '',
+      pokemonTcgApiKey: (ENV.pokemonTcgApiKey as string) || '',
       language: 'de',
       scanStats: {
         totalScans: 0,
         scansToday: 0,
         scansThisHour: 0,
         estimatedCostToday: 0,
+        cardScansToday: 0,
+        totalCardScans: 0,
       },
       cacheSize: 0,
       appVersion: '1.0.0',
@@ -65,6 +73,7 @@ export const useSettingsStore = create<SettingsState>()(
       setTheme: (themeId) => set({ themeId }),
       setDefaultRefreshInterval: (defaultRefreshInterval) => set({ defaultRefreshInterval }),
       setClaudeApiKey: (claudeApiKey) => set({ claudeApiKey }),
+      setPokemonTcgApiKey: (pokemonTcgApiKey) => set({ pokemonTcgApiKey }),
       setLanguage: (language) => set({ language }),
 
       updateScanStats: (stats) =>
@@ -81,7 +90,17 @@ export const useSettingsStore = create<SettingsState>()(
             totalScans: state.scanStats.totalScans + 1,
             scansToday: state.scanStats.scansToday + 1,
             scansThisHour: state.scanStats.scansThisHour + 1,
-            estimatedCostToday: state.scanStats.estimatedCostToday + 0.0003,
+            estimatedCostToday: state.scanStats.estimatedCostToday + 0.01,
+          },
+        })),
+
+      incrementCardScanCount: () =>
+        set((state) => ({
+          scanStats: {
+            ...state.scanStats,
+            cardScansToday: state.scanStats.cardScansToday + 1,
+            totalCardScans: state.scanStats.totalCardScans + 1,
+            estimatedCostToday: state.scanStats.estimatedCostToday + 0.01,
           },
         })),
 
