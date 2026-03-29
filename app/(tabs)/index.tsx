@@ -11,7 +11,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import * as FileSystem from 'expo-file-system';
-import { installApk } from '@/src/utils/apkInstaller';
+import * as IntentLauncher from 'expo-intent-launcher';
 import { useTheme } from '@/src/theme';
 import { useItemStore } from '@/src/store';
 import { useSettingsStore } from '@/src/store/useSettingsStore';
@@ -171,7 +171,12 @@ function UpdateBanner({ release, onDismiss }: { release: GitHubRelease; onDismis
       );
       const result = await dl.downloadAsync();
       if (!result?.uri) throw new Error('Download fehlgeschlagen');
-      await installApk(result.uri);
+      const contentUri = await FileSystem.getContentUriAsync(result.uri);
+      await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
+        data: contentUri,
+        flags: 1, // FLAG_GRANT_READ_URI_PERMISSION
+        type: 'application/vnd.android.package-archive',
+      });
     } catch {
       Alert.alert('Update fehlgeschlagen', 'Bitte von GitHub herunterladen.');
     } finally {

@@ -27,6 +27,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       'android.permission.CAMERA',
       'android.permission.INTERNET',
       'android.permission.WRITE_EXTERNAL_STORAGE',
+      'android.permission.REQUEST_INSTALL_PACKAGES',
     ],
     intentFilters: [
       {
