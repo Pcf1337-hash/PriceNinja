@@ -13,10 +13,10 @@ export type CurrencyCode = 'EUR' | 'USD' | 'GBP' | 'CHF' | 'JPY';
 interface ScanStats {
   totalScans: number;
   scansToday: number;
-  scansThisHour: number;
   estimatedCostToday: number;
   cardScansToday: number;
   totalCardScans: number;
+  statsDate: string; // 'YYYY-MM-DD' — reset wenn neuer Tag
 }
 
 interface SettingsState {
@@ -59,10 +59,10 @@ export const useSettingsStore = create<SettingsState>()(
       scanStats: {
         totalScans: 0,
         scansToday: 0,
-        scansThisHour: 0,
         estimatedCostToday: 0,
         cardScansToday: 0,
         totalCardScans: 0,
+        statsDate: new Date().toISOString().slice(0, 10),
       },
       cacheSize: 0,
       appVersion: '1.0.0',
@@ -84,25 +84,36 @@ export const useSettingsStore = create<SettingsState>()(
       setCacheSize: (cacheSize) => set({ cacheSize }),
 
       incrementScanCount: () =>
-        set((state) => ({
-          scanStats: {
-            ...state.scanStats,
-            totalScans: state.scanStats.totalScans + 1,
-            scansToday: state.scanStats.scansToday + 1,
-            scansThisHour: state.scanStats.scansThisHour + 1,
-            estimatedCostToday: state.scanStats.estimatedCostToday + 0.01,
-          },
-        })),
+        set((state) => {
+          const today = new Date().toISOString().slice(0, 10);
+          const isNewDay = state.scanStats.statsDate !== today;
+          return {
+            scanStats: {
+              ...state.scanStats,
+              statsDate: today,
+              totalScans: state.scanStats.totalScans + 1,
+              scansToday: isNewDay ? 1 : state.scanStats.scansToday + 1,
+              cardScansToday: isNewDay ? 0 : state.scanStats.cardScansToday,
+              estimatedCostToday: isNewDay ? 0.01 : state.scanStats.estimatedCostToday + 0.01,
+            },
+          };
+        }),
 
       incrementCardScanCount: () =>
-        set((state) => ({
-          scanStats: {
-            ...state.scanStats,
-            cardScansToday: state.scanStats.cardScansToday + 1,
-            totalCardScans: state.scanStats.totalCardScans + 1,
-            estimatedCostToday: state.scanStats.estimatedCostToday + 0.01,
-          },
-        })),
+        set((state) => {
+          const today = new Date().toISOString().slice(0, 10);
+          const isNewDay = state.scanStats.statsDate !== today;
+          return {
+            scanStats: {
+              ...state.scanStats,
+              statsDate: today,
+              totalCardScans: state.scanStats.totalCardScans + 1,
+              cardScansToday: isNewDay ? 1 : state.scanStats.cardScansToday + 1,
+              scansToday: isNewDay ? 0 : state.scanStats.scansToday,
+              estimatedCostToday: isNewDay ? 0.01 : state.scanStats.estimatedCostToday + 0.01,
+            },
+          };
+        }),
 
       setLastUpdateCheck: (lastUpdateCheck) => set({ lastUpdateCheck }),
       setPrimaryCurrency: (primaryCurrency) => set({ primaryCurrency }),
@@ -111,7 +122,6 @@ export const useSettingsStore = create<SettingsState>()(
     {
       name: 'priceninja-settings',
       storage: createJSONStorage(() => AsyncStorage),
-      // Don't persist scanStats — reset on each session
       partialize: (state) => ({
         themeId: state.themeId,
         defaultRefreshInterval: state.defaultRefreshInterval,
@@ -120,6 +130,7 @@ export const useSettingsStore = create<SettingsState>()(
         primaryCurrency: state.primaryCurrency,
         secondaryCurrency: state.secondaryCurrency,
         lastUpdateCheck: state.lastUpdateCheck,
+        scanStats: state.scanStats,
       }),
     }
   )

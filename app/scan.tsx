@@ -123,8 +123,8 @@ export default function ScanScreen() {
   const { addItem } = useItemStore();
   const params = useLocalSearchParams<{ textQuery?: string }>();
 
-  const canScan = scanStats.scansThisHour < SCAN_RATE_LIMIT;
-  const remainingScans = Math.max(0, SCAN_RATE_LIMIT - scanStats.scansThisHour);
+  const canScan = scanStats.scansToday < SCAN_RATE_LIMIT;
+  const remainingScans = Math.max(0, SCAN_RATE_LIMIT - scanStats.scansToday);
 
   useEffect(() => {
     if (params.textQuery) {
