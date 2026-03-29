@@ -79,7 +79,8 @@ async function refreshToken(account: EbayAccount): Promise<string> {
 export async function fetchSoldListings(
   account: EbayAccount,
   searchQuery: string,
-  limit = 10
+  limit = 10,
+  categoryId?: string
 ): Promise<EbaySoldListing[]> {
   const token = await getValidToken(account);
   const baseUrl = account.isSandbox ? EBAY_SANDBOX_BASE_URL : EBAY_PROD_BASE_URL;
@@ -89,6 +90,8 @@ export async function fetchSoldListings(
     limit: String(limit),
     filter: 'buyingOptions:{FIXED_PRICE|AUCTION},conditionIds:{3000|4000|5000|6000}',
   });
+
+  if (categoryId) params.set('category_ids', categoryId);
 
   const response = await fetch(
     `${baseUrl}/buy/browse/v1/item_summary/search?${params}`,
@@ -125,9 +128,8 @@ export async function fetchSoldListings(
 export async function exchangeAuthCode(
   appId: string,
   certId: string,
-  clientSecret: string,
+  ruName: string,
   authCode: string,
-  redirectUri: string,
   isSandbox: boolean
 ): Promise<{ accessToken: string; refreshToken: string; expiresAt: string }> {
   const tokenUrl = isSandbox ? EBAY_SANDBOX_TOKEN_URL : EBAY_TOKEN_URL;
@@ -142,7 +144,7 @@ export async function exchangeAuthCode(
     body: new URLSearchParams({
       grant_type: 'authorization_code',
       code: authCode,
-      redirect_uri: redirectUri,
+      redirect_uri: ruName, // eBay erwartet den RuName als redirect_uri
     }).toString(),
   });
 
@@ -205,4 +207,69 @@ export async function createEbayListing(
     listingId: `emio-${Date.now()}`,
     listingUrl: `https://www.ebay.de/itm/emio-${Date.now()}`,
   };
+}
+
+// ─── Multi-Query Fallback ──────────────────────────────────────────────────────
+
+export async function fetchSoldListingsWithFallback(
+  account: EbayAccount,
+  primaryQuery: string,
+  alternativeQueries: string[],
+  limit = 10,
+  categoryId?: string
+): Promise<EbaySoldListing[]> {
+  // Versuche erst primaryQuery
+  let results = await fetchSoldListings(account, primaryQuery, limit, categoryId);
+
+  // Wenn < 5 Ergebnisse, versuche alternatives
+  for (const altQuery of alternativeQueries) {
+    if (results.length >= 5) break;
+    const altResults = await fetchSoldListings(account, altQuery, limit, categoryId);
+    // Merge ohne Duplikate (check by url)
+    const existingUrls = new Set(results.map(r => r.url));
+    const newResults = altResults.filter(r => !existingUrls.has(r.url));
+    results = [...results, ...newResults];
+  }
+
+  return results.slice(0, limit);
+}
+
+// ─── Image Search ──────────────────────────────────────────────────────────────
+
+export async function searchEbayByImage(
+  account: EbayAccount,
+  base64Image: string,
+  limit = 10
+): Promise<EbaySoldListing[]> {
+  const token = await getValidToken(account);
+  const baseUrl = account.isSandbox ? EBAY_SANDBOX_BASE_URL : EBAY_PROD_BASE_URL;
+
+  const response = await fetch(
+    `${baseUrl}/buy/browse/v1/item_summary/search_by_image?limit=${limit}`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'X-EBAY-C-MARKETPLACE-ID': 'EBAY_DE',
+        'Accept-Language': 'de-DE',
+      },
+      body: JSON.stringify({ image: base64Image }),
+    }
+  );
+
+  if (!response.ok) return [];
+
+  const data = await response.json();
+  const items = (data.itemSummaries ?? []) as Record<string, unknown>[];
+
+  return items.map((item) => ({
+    title: item.title as string,
+    price: parseFloat((item.price as Record<string, string>)?.value ?? '0'),
+    currency: (item.price as Record<string, string>)?.currency ?? 'EUR',
+    soldDate: (item.itemEndDate as string) ?? new Date().toISOString(),
+    condition: (item.condition as string) ?? 'Unknown',
+    url: (item.itemWebUrl as string) ?? '',
+    imageUrl: ((item.image as Record<string, string>)?.imageUrl) ?? undefined,
+  }));
 }

@@ -1,8 +1,8 @@
-export const APP_VERSION = '1.1.1';
+export const APP_VERSION = '1.5.0';
 export const APP_NAME = 'PriceNinja';
 export const GITHUB_REPO = 'Pcf1337-hash/PriceNinja';
 
-export const SCAN_RATE_LIMIT = 30; // per hour
+export const SCAN_RATE_LIMIT = 150; // per hour (~300-400/day = 30-40ct mit Haiku)
 export const SCAN_RATE_WINDOW = 60 * 60 * 1000; // 1 hour in ms
 
 export const PRICE_CACHE_MIN_AGE = 60 * 60 * 1000; // 1 hour in ms
@@ -29,3 +29,5 @@ export const IMAGE_QUALITY = 0.7;
 
 export const DB_NAME = 'price_ninja.db';
 export const DB_VERSION = 1;
+
+export const POKEMON_TCG_API_BASE = 'https://api.pokemontcg.io/v2';

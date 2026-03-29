@@ -10,14 +10,14 @@ const ENV = Constants.expoConfig?.extra ?? {};
 function buildEnvPapaAccount(): EbayAccount | null {
   const appId = ENV.ebayAppId as string;
   const certId = ENV.ebayCertId as string;
-  const clientSecret = ENV.ebayClientSecret as string;
-  if (!appId || !certId || !clientSecret) return null;
+  const ruName = ENV.ebayRuName as string;
+  if (!appId || !certId || !ruName) return null;
   return {
     type: 'papa',
     username: 'Papa eBay',
     appId,
     certId,
-    clientSecret,
+    ruName,
     accessToken: '',
     refreshToken: '',
     tokenExpiresAt: '',

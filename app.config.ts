@@ -4,7 +4,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   ...config,
   name: 'PriceNinja',
   slug: 'price-ninja',
-  version: '1.1.1',
+  version: '1.5.0',
   orientation: 'portrait',
   icon: './assets/icon.png',
   userInterfaceStyle: 'dark',
@@ -27,6 +27,14 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       'android.permission.CAMERA',
       'android.permission.INTERNET',
       'android.permission.WRITE_EXTERNAL_STORAGE',
+    ],
+    intentFilters: [
+      {
+        action: 'VIEW',
+        autoVerify: true,
+        data: [{ scheme: 'priceninja', host: 'ebay-callback' }],
+        category: ['BROWSABLE', 'DEFAULT'],
+      },
     ],
   },
   plugins: [
@@ -57,9 +65,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     claudeApiKey: process.env.CLAUDE_API_KEY ?? '',
     ebayAppId: process.env.EBAY_APP_ID ?? '',
     ebayCertId: process.env.EBAY_CERT_ID ?? '',
-    ebayClientSecret: process.env.EBAY_CLIENT_SECRET ?? '',
-    ebayRedirectUri: process.env.EBAY_REDIRECT_URI ?? 'priceninja://ebay-callback',
+    ebayRuName: process.env.EBAY_RU_NAME ?? '',
     githubToken: process.env.GITHUB_TOKEN ?? '',
+    pokemonTcgApiKey: process.env.POKEMON_TCG_API_KEY ?? '',
   },
   scheme: 'priceninja',
 });

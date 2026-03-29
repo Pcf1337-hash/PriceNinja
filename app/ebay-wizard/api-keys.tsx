@@ -10,21 +10,21 @@ import { ThemedView, ThemedText, GlowCard, PrimaryButton } from '@/src/component
 import { getSelectedAccountType } from './account-type';
 
 // Shared API keys for wizard flow
-export let wizardApiKeys = { appId: '', certId: '', clientSecret: '' };
+export let wizardApiKeys = { appId: '', certId: '', ruName: '' };
 
 export default function ApiKeysScreen() {
   const { theme } = useTheme();
   const insets = useSafeAreaInsets();
   const [appId, setAppId] = useState('');
   const [certId, setCertId] = useState('');
-  const [clientSecret, setClientSecret] = useState('');
+  const [ruName, setRuName] = useState('');
   const [validating, setValidating] = useState(false);
   const accountType = getSelectedAccountType();
 
-  const isValid = appId.trim().length > 10 && certId.trim().length > 10 && clientSecret.trim().length > 10;
+  const isValid = appId.trim().length > 10 && certId.trim().length > 10 && ruName.trim().length > 5;
 
   const handleNext = async () => {
-    wizardApiKeys = { appId: appId.trim(), certId: certId.trim(), clientSecret: clientSecret.trim() };
+    wizardApiKeys = { appId: appId.trim(), certId: certId.trim(), ruName: ruName.trim() };
     router.push('/ebay-wizard/login');
   };
 
@@ -93,24 +93,23 @@ export default function ApiKeysScreen() {
           </View>
 
           <View>
-            <ThemedText weight="semibold" style={{ marginBottom: 6 }}>Dev ID (Client Secret alt.)</ThemedText>
+            <ThemedText weight="semibold" style={{ marginBottom: 6 }}>RuName (Redirect URI Name)</ThemedText>
             <TextInput
-              value={clientSecret}
-              onChangeText={setClientSecret}
-              placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+              value={ruName}
+              onChangeText={setRuName}
+              placeholder="DeinName-PriceNin-PRD-xxxxxxxx"
               placeholderTextColor={theme.colors.textMuted}
               style={inputStyle}
-              secureTextEntry
               autoCapitalize="none"
               autoCorrect={false}
-              accessibilityLabel="Client Secret eingabe"
+              accessibilityLabel="RuName eingabe"
             />
           </View>
         </GlowCard>
 
         <GlowCard style={{ borderColor: theme.colors.info + '44' }}>
           <ThemedText variant="muted" size="sm" style={{ lineHeight: 20 }}>
-            💡 Tipp: Nutze zunächst die Sandbox-Umgebung zum Testen. Die Keys findest du unter "Application Keys" in deinem eBay Developer Dashboard.
+            💡 Den RuName findest du unter: eBay Developer Console → Application Keys → [deine App] → User Tokens → "Get a Token from eBay via Your Application". Der RuName sieht aus wie: DeinName-PriceNin-PRD-xxxxxxxx
           </ThemedText>
         </GlowCard>
       </ScrollView>

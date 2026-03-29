@@ -1,68 +1,80 @@
-import React, { useRef, useState } from 'react';
+import React, { useState } from 'react';
 import { View, StyleSheet, TouchableOpacity, Text, ActivityIndicator, Alert } from 'react-native';
-import { WebView, WebViewNavigation } from 'react-native-webview';
-import type { WebViewErrorEvent, WebViewHttpErrorEvent } from 'react-native-webview/lib/WebViewTypes';
+import * as WebBrowser from 'expo-web-browser';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/src/theme';
-import { ThemedView, ThemedText } from '@/src/components/ui';
+import { ThemedView, ThemedText, GlowCard } from '@/src/components/ui';
 import { getSelectedAccountType } from './account-type';
 import { wizardApiKeys } from './api-keys';
 import { exchangeAuthCode, saveEbayAccount } from '@/src/api/ebay';
 import { useEbayStore } from '@/src/store/useEbayStore';
 import { EbayAccount } from '@/src/types/ebay';
-import {
-  EBAY_SANDBOX_AUTH_URL,
-  EBAY_AUTH_URL,
-} from '@/src/utils/constants';
+import { EBAY_SANDBOX_AUTH_URL, EBAY_AUTH_URL } from '@/src/utils/constants';
 
-// REDIRECT_URI must be registered in eBay developer settings under "Auth accepted URL"
-const REDIRECT_URI = 'priceninja://ebay-callback';
-const USE_SANDBOX = false; // Production eBay — use production keys
+// HTTPS Relay auf Vercel — diese URL wird als Accept URL im eBay RuName eingetragen
+// Das Relay leitet weiter zu priceninja://ebay-callback (deep link)
+const VERCEL_RELAY_URL = 'https://priceninja-auth-relay.vercel.app/api/ebay-callback';
+// Die native App-URL die WebBrowser.openAuthSessionAsync abfängt
+const CALLBACK_SCHEME = 'priceninja://ebay-callback';
+const USE_SANDBOX = false;
 
 export default function LoginScreen() {
   const { theme } = useTheme();
   const insets = useSafeAreaInsets();
   const accountType = getSelectedAccountType();
   const { setPapaAccount, setOwnAccount, setActiveAccount } = useEbayStore();
-  const [loading, setLoading] = useState(true);
-  const [exchanging, setExchanging] = useState(false);
+  const [loading, setLoading] = useState(false);
 
   const scope = accountType === 'papa'
     ? 'https://api.ebay.com/oauth/api_scope'
     : 'https://api.ebay.com/oauth/api_scope https://api.ebay.com/oauth/api_scope/sell.inventory';
 
-  const baseAuthUrl = USE_SANDBOX ? EBAY_SANDBOX_AUTH_URL : EBAY_AUTH_URL;
-  const authUrl = `${baseAuthUrl}?client_id=${wizardApiKeys.appId}&response_type=code&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=${encodeURIComponent(scope)}`;
+  const handleLogin = async () => {
+    const { appId, certId, ruName } = wizardApiKeys;
 
-  const handleNavChange = async (nav: WebViewNavigation) => {
-    const url = nav.url;
-    if (!url.startsWith(REDIRECT_URI)) return;
-
-    const urlObj = new URL(url);
-    const code = urlObj.searchParams.get('code');
-    if (!code) {
-      router.back();
+    if (!appId || !certId || !ruName) {
+      Alert.alert('Fehler', 'App ID, Cert ID und RuName müssen ausgefüllt sein.');
       return;
     }
 
-    setExchanging(true);
+    const baseAuthUrl = USE_SANDBOX ? EBAY_SANDBOX_AUTH_URL : EBAY_AUTH_URL;
+    // eBay: redirect_uri im Auth-URL muss der RuName sein (nicht die callback URL)
+    const authUrl =
+      `${baseAuthUrl}?client_id=${appId}` +
+      `&response_type=code` +
+      `&redirect_uri=${encodeURIComponent(ruName)}` +
+      `&scope=${encodeURIComponent(scope)}` +
+      `&prompt=login`;
+
+    setLoading(true);
     try {
-      const tokens = await exchangeAuthCode(
-        wizardApiKeys.appId,
-        wizardApiKeys.certId,
-        wizardApiKeys.clientSecret,
-        code,
-        REDIRECT_URI,
-        USE_SANDBOX
-      );
+      const result = await WebBrowser.openAuthSessionAsync(authUrl, CALLBACK_SCHEME);
+
+      if (result.type === 'cancel' || result.type === 'dismiss') {
+        return;
+      }
+
+      if (result.type !== 'success' || !result.url) {
+        Alert.alert('Fehler', 'eBay Login abgebrochen oder fehlgeschlagen.');
+        return;
+      }
+
+      const url = new URL(result.url);
+      const code = url.searchParams.get('code');
+      if (!code) {
+        Alert.alert('Fehler', 'Kein Autorisierungscode erhalten. Bitte prüfe den RuName.');
+        return;
+      }
+
+      const tokens = await exchangeAuthCode(appId, certId, ruName, code, USE_SANDBOX);
 
       const account: EbayAccount = {
         type: accountType,
         username: accountType === 'papa' ? 'Papa' : 'Mein Account',
-        appId: wizardApiKeys.appId,
-        certId: wizardApiKeys.certId,
-        clientSecret: wizardApiKeys.clientSecret,
+        appId,
+        certId,
+        ruName,
         accessToken: tokens.accessToken,
         refreshToken: tokens.refreshToken,
         tokenExpiresAt: tokens.expiresAt,
@@ -81,23 +93,15 @@ export default function LoginScreen() {
 
       router.replace('/ebay-wizard/done');
     } catch (e) {
-      console.error('Token exchange failed:', e);
-      router.back();
+      console.error('eBay Login Fehler:', e);
+      Alert.alert(
+        'Login fehlgeschlagen',
+        'Token-Austausch fehlgeschlagen. Bitte prüfe App ID, Cert ID und RuName.'
+      );
     } finally {
-      setExchanging(false);
+      setLoading(false);
     }
   };
-
-  if (exchanging) {
-    return (
-      <ThemedView style={[styles.container, styles.centered, { paddingTop: insets.top }]}>
-        <ActivityIndicator color={theme.colors.primary} size="large" />
-        <ThemedText variant="secondary" style={{ marginTop: 16 }}>
-          Account wird verbunden...
-        </ThemedText>
-      </ThemedView>
-    );
-  }
 
   return (
     <ThemedView style={[styles.container, { paddingTop: insets.top }]}>
@@ -108,54 +112,66 @@ export default function LoginScreen() {
         <ThemedText variant="muted" size="sm">Schritt 4 von 5</ThemedText>
       </View>
 
-      {loading && (
-        <View style={styles.loadingOverlay}>
-          <ActivityIndicator color={theme.colors.primary} size="large" />
-          <ThemedText variant="secondary" style={{ marginTop: 12 }}>
-            eBay Login wird geladen...
-          </ThemedText>
-        </View>
-      )}
+      <View style={styles.content}>
+        <ThemedText weight="bold" size="xxl" style={{ marginBottom: 12 }}>
+          eBay Login
+        </ThemedText>
+        <ThemedText variant="secondary" style={{ lineHeight: 22, marginBottom: 32 }}>
+          Tippe auf den Button um dich mit deinem eBay-Account anzumelden. Der sichere Browser öffnet sich und schließt sich nach dem Login automatisch.
+        </ThemedText>
 
-      <WebView
-        source={{ uri: authUrl }}
-        onNavigationStateChange={handleNavChange}
-        onShouldStartLoadWithRequest={(request) => {
-          if (request.url.startsWith('priceninja://')) {
-            // Intercept custom scheme — handle manually, prevent WebView error
-            handleNavChange({ url: request.url } as WebViewNavigation);
-            return false;
-          }
-          return true;
-        }}
-        onLoad={() => setLoading(false)}
-        onError={(_e: WebViewErrorEvent) => {
-          Alert.alert(
-            'Fehler',
-            'eBay konnte nicht geladen werden. Bitte prüfe deine Internetverbindung.',
-            [{ text: 'OK', onPress: () => router.back() }]
-          );
-        }}
-        onHttpError={(e: WebViewHttpErrorEvent) => {
-          if (e.nativeEvent.statusCode >= 400) {
-            Alert.alert(
-              'Fehler',
-              `eBay hat einen Fehler zurückgegeben (${e.nativeEvent.statusCode}). Bitte versuche es erneut.`,
-              [{ text: 'OK', onPress: () => router.back() }]
-            );
-          }
-        }}
-        style={{ flex: 1 }}
-        originWhitelist={['*']}
-        accessibilityLabel="eBay Login WebView"
-      />
+        <TouchableOpacity
+          style={[
+            styles.loginButton,
+            {
+              backgroundColor: theme.colors.primary,
+              borderRadius: theme.radius.md,
+              opacity: loading ? 0.6 : 1,
+            },
+          ]}
+          onPress={handleLogin}
+          disabled={loading}
+          accessibilityLabel="Mit eBay anmelden"
+        >
+          {loading ? (
+            <ActivityIndicator color="#000" />
+          ) : (
+            <Text style={styles.loginButtonText}>Mit eBay anmelden</Text>
+          )}
+        </TouchableOpacity>
+
+        <GlowCard style={{ marginTop: 24, borderColor: theme.colors.info + '44' }}>
+          <ThemedText variant="muted" size="sm" style={{ lineHeight: 20 }}>
+            ℹ️ Der RuName muss in der eBay Developer Console als Accept URL eingetragen sein:{'\n'}
+            https://priceninja-auth-relay.vercel.app/api/ebay-callback
+          </ThemedText>
+        </GlowCard>
+      </View>
     </ThemedView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  centered: { alignItems: 'center', justifyContent: 'center' },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 16 },
-  loadingOverlay: { position: 'absolute', top: '50%', left: 0, right: 0, alignItems: 'center', zIndex: 10 },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+  },
+  content: {
+    flex: 1,
+    padding: 24,
+    justifyContent: 'center',
+  },
+  loginButton: {
+    paddingVertical: 16,
+    alignItems: 'center',
+  },
+  loginButtonText: {
+    color: '#000',
+    fontSize: 16,
+    fontWeight: '700',
+  },
 });

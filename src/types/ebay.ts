@@ -5,7 +5,7 @@ export interface EbayAccount {
   username: string;
   appId: string;
   certId: string;
-  clientSecret: string;
+  ruName: string;
   accessToken: string;
   refreshToken: string;
   tokenExpiresAt: string;
