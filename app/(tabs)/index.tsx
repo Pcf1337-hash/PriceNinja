@@ -8,6 +8,7 @@ import {
   TouchableOpacity,
   Alert,
   Image,
+  Modal,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
@@ -159,6 +160,77 @@ function ApiCostBanner() {
   );
 }
 
+function UpdateModal({ release, onDismiss }: { release: GitHubRelease; onDismiss: () => void }) {
+  const { theme } = useTheme();
+  const [downloading, setDownloading] = useState(false);
+  const [progress, setProgress] = useState(0);
+
+  const handleUpdate = async () => {
+    setDownloading(true);
+    try {
+      const dest = `${FileSystem.cacheDirectory}PriceNinja-${release.version}.apk`;
+      const dl = FileSystem.createDownloadResumable(
+        release.apkUrl,
+        dest,
+        {},
+        ({ totalBytesWritten, totalBytesExpectedToWrite }) => {
+          if (totalBytesExpectedToWrite > 0) {
+            setProgress(Math.round((totalBytesWritten / totalBytesExpectedToWrite) * 100));
+          }
+        },
+      );
+      const result = await dl.downloadAsync();
+      if (!result?.uri) throw new Error('Download fehlgeschlagen');
+      const contentUri = await FileSystem.getContentUriAsync(result.uri);
+      await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
+        data: contentUri,
+        flags: 1,
+        type: 'application/vnd.android.package-archive',
+      });
+    } catch {
+      Alert.alert('Update fehlgeschlagen', 'Bitte von GitHub herunterladen.');
+    } finally {
+      setDownloading(false);
+      setProgress(0);
+    }
+  };
+
+  return (
+    <Modal transparent animationType="fade" visible onRequestClose={onDismiss}>
+      <View style={modalStyles.backdrop}>
+        <View style={[modalStyles.card, { backgroundColor: theme.colors.surface, borderColor: theme.colors.primary }]}>
+          <Text style={{ fontSize: 40, textAlign: 'center', marginBottom: 8 }}>🚀</Text>
+          <Text style={{ color: theme.colors.text, fontWeight: 'bold', fontSize: 18, textAlign: 'center', marginBottom: 4 }}>
+            Update verfügbar!
+          </Text>
+          <Text style={{ color: theme.colors.textMuted, fontSize: 14, textAlign: 'center', marginBottom: 20 }}>
+            Version {release.version} ist bereit zum Installieren.
+          </Text>
+          <TouchableOpacity
+            onPress={handleUpdate}
+            disabled={downloading}
+            style={[modalStyles.btn, { backgroundColor: theme.colors.primary, opacity: downloading ? 0.7 : 1 }]}
+            accessibilityLabel="Update installieren"
+          >
+            <Text style={{ color: theme.colors.background, fontWeight: 'bold', fontSize: 15 }}>
+              {downloading ? `Herunterladen... ${progress}%` : 'Jetzt updaten'}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={onDismiss} style={[modalStyles.btn, { backgroundColor: 'transparent', marginTop: 8 }]}>
+            <Text style={{ color: theme.colors.textMuted, fontSize: 14 }}>Später</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+const modalStyles = StyleSheet.create({
+  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', alignItems: 'center', justifyContent: 'center' },
+  card: { width: '80%', borderRadius: 16, borderWidth: 1, padding: 24, alignItems: 'center' },
+  btn: { width: '100%', paddingVertical: 13, borderRadius: 10, alignItems: 'center' },
+});
+
 function UpdateBanner({ release, onDismiss }: { release: GitHubRelease; onDismiss: () => void }) {
   const { theme } = useTheme();
   const [downloading, setDownloading] = useState(false);
@@ -271,11 +343,9 @@ export default function DashboardScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Update banner */}
+      {/* Update modal — automatisch beim Start */}
       {updateRelease && (
-        <View style={styles.bannerContainer}>
-          <UpdateBanner release={updateRelease} onDismiss={() => setUpdateRelease(null)} />
-        </View>
+        <UpdateModal release={updateRelease} onDismiss={() => setUpdateRelease(null)} />
       )}
 
       {isLoading && items.length === 0 ? (

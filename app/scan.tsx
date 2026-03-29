@@ -23,11 +23,55 @@ import { ThemedView, ThemedText, GlowCard, PrimaryButton } from '@/src/component
 import { identifyItem, ClaudeAlternative } from '@/src/api/claude';
 import { fetchSoldListingsPublic } from '@/src/api/ebay';
 import { fetchGeizhalsPrice } from '@/src/api/geizhals';
+import { fetchBricklinkPrice, BricklinkResult } from '@/src/api/bricklink';
 import { calculatePriceStats, formatPrice } from '@/src/utils/pricing';
 import { SCAN_RATE_LIMIT } from '@/src/utils/constants';
 import { TrackedItem, EbaySoldListing } from '@/src/types/item';
 import { ClaudeItemResult } from '@/src/api/claude';
 import 'react-native-get-random-values';
+
+const SCAN_MESSAGES = [
+  'Aufnahme wird von Heinzelmännchen geprüft...',
+  'Übergabe an das Analyse-Komitee...',
+  'KI trinkt erst noch Kaffee...',
+  'Artikel wird in der Datenbank des Grauens gesucht...',
+  'Quantencomputer wird hochgefahren...',
+  'Experten werden aus dem Urlaub geholt...',
+  'Preisalgorithmus schwitzt gerade...',
+  'Scanning mit Lichtgeschwindigkeit™...',
+  'Hamster im Laufrad dreht auf Hochtouren...',
+  'Das Orakel wird befragt...',
+  'Server in Übersee werden belästigt...',
+  'Geheime KI-Agenten sind unterwegs...',
+  'Barcode-Ninja schwingt sein Katana...',
+  'Analyse läuft... oder schläft der Prozessor?',
+  'Pixel werden einzeln gezählt...',
+  'Preisfinder 3000 wird kalibriert...',
+  'Artikel wird mit historischen Aufzeichnungen verglichen...',
+  'Kleine Roboter durchsuchen das Internet...',
+  'Geizhals wird aus dem Tiefschlaf geweckt...',
+  'eBay-Algorithmus wird überlistet...',
+  'Bits und Bytes werden sortiert...',
+  'KI kratzt sich am Kopf...',
+  'Ergebnis wird poliert und verpackt...',
+  'Datenbankabfrage im Galopp...',
+  'Märkte werden in Echtzeit bespitzelt...',
+  'Preisroboter macht Liegestütze...',
+  'Marktanalyse im Zeitraffer...',
+  'Produktdaten werden aus dem Äther gezogen...',
+  'Ninja schleicht durch den Datendschungel...',
+  'Supercomputer gibt sein Bestes...',
+  'Ladebalken ist nur zur Beruhigung...',
+  'Ergebnis ist schon fast fertig... fast.',
+  'Preis wird auf Komma genau berechnet...',
+  'Verkaufsdaten aus aller Welt werden gesichtet...',
+  'KI überlegt ob sie sich das wirklich antun will...',
+  'Scanvorgang läuft durch 7 Firewalls...',
+  'Produkterkennung im Turbo-Modus...',
+  'Loot wird bewertet...',
+  'Das Analyse-Team hat ein Meeting...',
+  'Preisbarometer wird geeicht...',
+];
 import { v4 as uuidv4 } from 'uuid';
 
 type ScanState = 'idle' | 'scanning' | 'confirming' | 'fetching-prices' | 'prices-ready';
@@ -41,6 +85,7 @@ interface ScanResult {
   ebaySoldMax?: number;
   geizhalsCheapest?: number;
   geizhalsUrl?: string;
+  bricklink?: BricklinkResult;
 }
 
 function ImageCarousel({ images }: { images: string[] }) {
@@ -118,6 +163,7 @@ export default function ScanScreen() {
   const [barcodeScanning, setBarcodeScanning] = useState(false);
   const [lastScannedBarcode, setLastScannedBarcode] = useState<string | null>(null);
   const [scannedItemName, setScannedItemName] = useState<string | null>(null);
+  const [scanningMessage, setScanningMessage] = useState('');
   const cameraRef = useRef<CameraView>(null);
   const { claudeApiKey, scanStats, incrementScanCount } = useSettingsStore();
   const { addItem } = useItemStore();
@@ -144,6 +190,7 @@ export default function ScanScreen() {
     }
 
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    setScanningMessage(SCAN_MESSAGES[Math.floor(Math.random() * SCAN_MESSAGES.length)]);
     setScanState('scanning');
 
     try {
@@ -234,7 +281,13 @@ export default function ScanScreen() {
       ebaySoldMin = stats.min > 0 ? stats.min : undefined;
       ebaySoldMax = stats.max > 0 ? stats.max : undefined;
 
-      const geizhals = await fetchGeizhalsPrice(claudeResult.searchQuery);
+      const [geizhals, bricklink] = await Promise.all([
+        fetchGeizhalsPrice(claudeResult.searchQuery),
+        fetchBricklinkPrice(claudeResult.searchQuery),
+      ]);
+
+      // Wenn kein eigenes Foto (Textsuche), erstes eBay-Bild als Thumbnail nehmen
+      const firstImage = soldListings.find(l => l.imageUrl)?.imageUrl;
 
       setScanResult((prev) =>
         prev
@@ -246,6 +299,8 @@ export default function ScanScreen() {
               ebaySoldMax,
               geizhalsCheapest: geizhals?.cheapestPrice,
               geizhalsUrl: geizhals?.url,
+              bricklink: bricklink ?? undefined,
+              imageUri: prev.imageUri || firstImage || '',
             }
           : null
       );
@@ -466,6 +521,16 @@ export default function ScanScreen() {
             </TouchableOpacity>
           </View>
 
+          {/* Scanning overlay message */}
+          {scanState === 'scanning' && (
+            <View style={[styles.scanningOverlay, { backgroundColor: 'rgba(0,0,0,0.75)' }]}>
+              <ActivityIndicator color={theme.colors.primary} size="large" />
+              <ThemedText weight="semibold" size="md" style={{ color: '#fff', marginTop: 16, textAlign: 'center', paddingHorizontal: 24 }}>
+                {scanningMessage}
+              </ThemedText>
+            </View>
+          )}
+
           {/* Remaining scans badge */}
           <View style={[styles.remainingBadge, { backgroundColor: theme.colors.surface + 'cc', top: insets.top + 72 }]}>
             <ThemedText size="xs" weight="semibold">
@@ -495,11 +560,7 @@ export default function ScanScreen() {
               ]}
               accessibilityLabel="Foto aufnehmen und scannen"
             >
-              {scanState === 'scanning' ? (
-                <ActivityIndicator color={theme.colors.primary} size="large" />
-              ) : (
-                <View style={[styles.captureInner, { backgroundColor: theme.colors.primary }]} />
-              )}
+              <View style={[styles.captureInner, { backgroundColor: theme.colors.primary }]} />
             </TouchableOpacity>
 
             {/* Barcode toggle button */}
@@ -687,7 +748,7 @@ export default function ScanScreen() {
                       )}
                     </>
                   ) : (
-                    <ThemedText variant="muted" size="xs" style={{ marginTop: 6 }}>Kein Account</ThemedText>
+                    <ThemedText variant="muted" size="xs" style={{ marginTop: 6 }}>Keine Daten</ThemedText>
                   )}
                 </View>
 
@@ -724,6 +785,34 @@ export default function ScanScreen() {
                   )}
                 </View>
               </View>
+
+              {/* Bricklink block */}
+              {scanResult.bricklink && (
+                <TouchableOpacity
+                  onPress={() => scanResult.bricklink?.url && Linking.openURL(scanResult.bricklink.url)}
+                  activeOpacity={0.7}
+                >
+                  <View style={[styles.priceCompareBlock, { backgroundColor: theme.colors.surface, borderColor: '#e3000b44' }]}>
+                    <View style={[styles.priceSourceTag, { backgroundColor: '#e3000b22' }]}>
+                      <ThemedText size="xs" weight="bold" style={{ color: '#e3000b' }}>BRICKLINK</ThemedText>
+                    </View>
+                    {scanResult.bricklink.avgPrice > 0 ? (
+                      <>
+                        <ThemedText weight="bold" style={[styles.priceCompareValue, { color: '#e3000b' }]}>
+                          {formatPrice(scanResult.bricklink.avgPrice)}
+                        </ThemedText>
+                        <ThemedText variant="muted" size="xs">Ø Marktpreis</ThemedText>
+                        {scanResult.bricklink.minPrice > 0 && (
+                          <ThemedText variant="muted" size="xs" style={{ marginTop: 2 }}>ab {formatPrice(scanResult.bricklink.minPrice)}</ThemedText>
+                        )}
+                        <ThemedText size="xs" style={{ color: '#e3000b', marginTop: 4 }}>→ bricklink.com</ThemedText>
+                      </>
+                    ) : (
+                      <ThemedText variant="muted" size="xs" style={{ marginTop: 6 }}>Keine Daten</ThemedText>
+                    )}
+                  </View>
+                </TouchableOpacity>
+              )}
 
               {/* ── Price Range Bar ── */}
               {scanResult.ebaySoldAvg && scanResult.ebaySoldMin && scanResult.ebaySoldMax && scanResult.ebaySoldMin !== scanResult.ebaySoldMax && (
@@ -809,6 +898,37 @@ export default function ScanScreen() {
                   ))}
                 </GlowCard>
               )}
+
+              {/* Ähnliche Ergebnisse mit Thumbnails */}
+              {scanResult.soldListings.filter(l => l.imageUrl).length > 0 && (
+                <GlowCard>
+                  <ThemedText variant="muted" size="xs" weight="semibold" style={{ letterSpacing: 1, marginBottom: 10 }}>
+                    ÄHNLICHE ERGEBNISSE
+                  </ThemedText>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginHorizontal: -4 }}>
+                    {scanResult.soldListings.filter(l => l.imageUrl).slice(0, 8).map((listing, i) => (
+                      <TouchableOpacity
+                        key={i}
+                        onPress={() => listing.url && Linking.openURL(listing.url)}
+                        style={{ marginHorizontal: 4, width: 90 }}
+                        activeOpacity={0.7}
+                      >
+                        <Image
+                          source={{ uri: listing.imageUrl }}
+                          style={{ width: 90, height: 90, borderRadius: 8, backgroundColor: theme.colors.surfaceAlt }}
+                          resizeMode="cover"
+                        />
+                        <ThemedText size="xs" variant="muted" numberOfLines={2} style={{ marginTop: 4, lineHeight: 14 }}>
+                          {listing.title}
+                        </ThemedText>
+                        <ThemedText size="xs" weight="bold" style={{ color: theme.colors.primary, marginTop: 2 }}>
+                          {formatPrice(listing.price)}
+                        </ThemedText>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </GlowCard>
+              )}
             </>
           )}
 
@@ -845,6 +965,13 @@ export default function ScanScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   centered: { alignItems: 'center', justifyContent: 'center' },
+  scanningOverlay: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 10,
+  },
   // Camera
   cameraContainer: { flex: 1, position: 'relative' },
   scanOverlay: {
