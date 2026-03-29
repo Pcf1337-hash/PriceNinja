@@ -15,30 +15,38 @@ const GEIZHALS_CACHE_TTL = PRICE_CACHE_MIN_AGE;
 
 function buildGeizhalsSearchUrl(query: string): string {
   const encoded = encodeURIComponent(query);
-  // No sort=p — use relevance sort so the matching product appears first, not cheap accessories
   return `${GEIZHALS_BASE_URL}/?fs=${encoded}&in=&bl=1&v=e`;
 }
 
 function parseGeizhalsHTML(html: string, query: string): GeizhalsResult | null {
-  // 1. Try JSON-LD structured data first (most reliable)
+  // 1. JSON-LD — only @type "Product" with offers (skip WebSite, Organization, etc.)
   const jsonLdMatches = html.matchAll(/<script[^>]*type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi);
   for (const ldMatch of jsonLdMatches) {
     try {
-      const data = JSON.parse(ldMatch[1]);
-      const items = Array.isArray(data) ? data : [data];
-      for (const item of items) {
-        const offers = item?.offers ?? item?.['@graph']?.[0]?.offers;
-        if (offers) {
-          const low = parseFloat(offers.lowPrice ?? offers.price ?? '0');
+      const raw = JSON.parse(ldMatch[1]) as Record<string, unknown>;
+      // Support both flat objects and @graph arrays
+      const nodes: Record<string, unknown>[] = raw['@graph']
+        ? (raw['@graph'] as Record<string, unknown>[])
+        : Array.isArray(raw)
+          ? (raw as Record<string, unknown>[])
+          : [raw];
+
+      for (const node of nodes) {
+        const type = node['@type'];
+        if ((type === 'Product' || type === 'Offer') && node.offers) {
+          const offers = node.offers as Record<string, unknown>;
+          const low = parseFloat(String(offers.lowPrice ?? offers.price ?? '0'));
           if (low > 1) {
-            const url = item.url ?? `${GEIZHALS_BASE_URL}/?fs=${encodeURIComponent(query)}`;
             return {
-              productName: item.name ?? query,
+              productName: String(node.name ?? query),
               cheapestPrice: low,
-              currency: offers.priceCurrency ?? 'EUR',
-              url,
-              priceRange: { min: low, max: parseFloat(offers.highPrice ?? String(low)) },
-              shopCount: offers.offerCount ?? 1,
+              currency: String(offers.priceCurrency ?? 'EUR'),
+              url: String(node.url ?? `${GEIZHALS_BASE_URL}/?fs=${encodeURIComponent(query)}`),
+              priceRange: {
+                min: low,
+                max: parseFloat(String(offers.highPrice ?? low)),
+              },
+              shopCount: typeof offers.offerCount === 'number' ? (offers.offerCount as number) : 1,
             };
           }
         }
@@ -48,10 +56,31 @@ function parseGeizhalsHTML(html: string, query: string): GeizhalsResult | null {
     }
   }
 
-  // 2. Try itemprop="price" (schema.org markup) — take the FIRST match (most relevant product)
-  const itempropMatch = html.match(/content="([\d.]+)"[^>]*itemprop="price"|itemprop="price"[^>]*content="([\d.]+)"/i);
-  if (itempropMatch) {
-    const p = parseFloat(itempropMatch[1] ?? itempropMatch[2]);
+  // 2. schema.org itemprop="lowPrice" — Geizhals marks the cheapest price this way
+  //    First match = first (most relevant) product in results
+  const lowPriceMatch = html.match(
+    /itemprop="lowPrice"[^>]*content="([\d.]+)"|content="([\d.]+)"[^>]*itemprop="lowPrice"/i
+  );
+  if (lowPriceMatch) {
+    const p = parseFloat(lowPriceMatch[1] ?? lowPriceMatch[2]);
+    if (p >= 1) {
+      const nameMatch = html.match(/itemprop="name"[^>]*content="([^"]+)"|content="([^"]+)"[^>]*itemprop="name"/i);
+      return {
+        productName: nameMatch ? (nameMatch[1] ?? nameMatch[2] ?? query) : query,
+        cheapestPrice: p,
+        currency: 'EUR',
+        url: `${GEIZHALS_BASE_URL}/?fs=${encodeURIComponent(query)}`,
+        priceRange: { min: p, max: p },
+        shopCount: 1,
+      };
+    }
+  }
+
+  // 3. First "ab X,XX €" pattern — Geizhals uses this for the cheapest price per result entry
+  //    Take only the FIRST occurrence (first search result = most relevant)
+  const abMatch = html.match(/\bab\s+(?:€\s*)?([\d]+[,.][\d]{2})(?:\s*€)?/);
+  if (abMatch) {
+    const p = parseFloat(abMatch[1].replace(',', '.'));
     if (p >= 1) {
       return {
         productName: query,
@@ -64,59 +93,8 @@ function parseGeizhalsHTML(html: string, query: string): GeizhalsResult | null {
     }
   }
 
-  // 3. Look for "ab € X,XX" patterns (Geizhals "from price" indicator for first result)
-  const abPricePattern = /ab\s*€?\s*(\d{1,4}[.,]\d{2})|(\d{1,4}[.,]\d{2})\s*€.*?(?:ab|günstig)/gi;
-  let abMatch;
-  const abPrices: number[] = [];
-  while ((abMatch = abPricePattern.exec(html)) !== null) {
-    const raw = (abMatch[1] ?? abMatch[2]).replace(',', '.');
-    const p = parseFloat(raw);
-    if (p >= 5) abPrices.push(p);
-  }
-  if (abPrices.length > 0) {
-    // Take median to avoid outliers, not minimum
-    abPrices.sort((a, b) => a - b);
-    const mid = abPrices[Math.floor(abPrices.length / 4)]; // first quartile → realistic cheapest
-    const url = `${GEIZHALS_BASE_URL}/?fs=${encodeURIComponent(query)}`;
-    return {
-      productName: query,
-      cheapestPrice: mid,
-      currency: 'EUR',
-      url,
-      priceRange: { min: abPrices[0], max: abPrices[abPrices.length - 1] },
-      shopCount: abPrices.length,
-    };
-  }
-
-  // 3. Fallback: collect all prices >= 10€ from the page, take first quartile
-  const pricePattern = /€\s*(\d{1,5}[.,]\d{2})|(\d{1,5}[.,]\d{2})\s*€/g;
-  const prices: number[] = [];
-  let match;
-  while ((match = pricePattern.exec(html)) !== null) {
-    const raw = (match[1] ?? match[2]).replace(',', '.');
-    const p = parseFloat(raw);
-    if (p >= 10 && p < 100000) prices.push(p);
-  }
-
-  if (prices.length === 0) return null;
-
-  prices.sort((a, b) => a - b);
-  // Use first quartile price — avoids picking up cheap games/accessories at the very bottom
-  const cheapest = prices[Math.floor(prices.length * 0.25)] ?? prices[0];
-
-  const urlMatch = html.match(/href="(\/[^"]+)"[^>]*class="[^"]*product[^"]*"/);
-  const productUrl = urlMatch
-    ? `${GEIZHALS_BASE_URL}${urlMatch[1]}`
-    : `${GEIZHALS_BASE_URL}/?fs=${encodeURIComponent(query)}`;
-
-  return {
-    productName: query,
-    cheapestPrice: cheapest,
-    currency: 'EUR',
-    url: productUrl,
-    priceRange: { min: prices[0], max: prices[prices.length - 1] },
-    shopCount: prices.length,
-  };
+  // No reliable price found — return null rather than guessing
+  return null;
 }
 
 export async function fetchGeizhalsPrice(

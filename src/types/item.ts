@@ -18,6 +18,9 @@ export interface TrackedItem extends ScannedItem {
   ebaySoldCount?: number;
   geizhalsCheapest?: number;
   geizhalsUrl?: string;
+  bricklinkAvg?: number;
+  bricklinkMin?: number;
+  bricklinkUrl?: string;
   lastPriceUpdate?: string;
   refreshInterval: 1 | 2 | 6 | 12 | 24; // hours
   priceHistory: PricePoint[];
