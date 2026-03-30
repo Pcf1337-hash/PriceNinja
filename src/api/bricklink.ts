@@ -58,7 +58,13 @@ async function fetchViaAjax(searchTerm: string, cond: Condition): Promise<Brickl
     const itemNo = item.strItemNo ?? '';
     if (!itemNo) return null;
 
-    const itemType = item.strItemType ?? 'S';
+    // BrickLink AJAX liefert volle Typnamen ("SET", "MINIFIG", "PART") — in URL-Buchstaben umwandeln
+    const typeMap: Record<string, string> = {
+      SET: 'S', MINIFIG: 'M', PART: 'P', GEAR: 'G', BOOK: 'B', CATALOG: 'C', INSTRUCTION: 'I',
+      S: 'S', M: 'M', P: 'P', G: 'G', B: 'B', C: 'C', I: 'I',
+    };
+    const rawType = (item.strItemType ?? 'S') as string;
+    const itemType = typeMap[rawType.toUpperCase()] ?? 'S';
     const sd = item.mSalesData ?? {};
 
     // Prio aus Forschungsbericht: nCurAvgPrice (aktuell) > nAvgPrice (historisch) > neu/gebraucht variants
@@ -128,7 +134,7 @@ async function fetchViaCatalogSearch(query: string): Promise<BricklinkResult | n
 }
 
 export async function fetchBricklinkPrice(query: string): Promise<BricklinkResult | null> {
-  const cacheKey = `bricklink_${query.toLowerCase().replace(/\s+/g, '_')}`;
+  const cacheKey = `bricklink2_${query.toLowerCase().replace(/\s+/g, '_')}`;
   const cached = await getCache<BricklinkResult>(cacheKey);
   if (cached) return cached;
 
