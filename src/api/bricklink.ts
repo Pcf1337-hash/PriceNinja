@@ -27,6 +27,14 @@ type Condition = 'U' | 'N' | '';
  * Versucht Preise via internes Bricklink AJAX zu holen.
  * Felder nach Forschungsbericht-Prio: nCurAvgPrice > nAvgPrice > nNewAvgPrice
  */
+// Parst BrickLink Preisstrings wie "EUR 4.00" oder "USD 5.50" → Zahl
+function parseBlPrice(s: string | undefined | null): number {
+  if (!s) return 0;
+  const match = s.match(/[\d]+(?:[.,]\d+)?/);
+  if (!match) return 0;
+  return parseFloat(match[0].replace(',', '.'));
+}
+
 async function fetchViaAjax(searchTerm: string, cond: Condition): Promise<BricklinkResult | null> {
   try {
     const url = `https://www.bricklink.com/ajax/clone/search/searchproduct.ajax?q=${encodeURIComponent(searchTerm)}&st=0&cond=${cond}&type=&cat=&yf=0&yt=0&loc=&reg=0&ca=0&ss=0&pmt=&nmp=0&color=-1&min=0&max=0&minqty=0&nosale=0&showempty=1&rpp=5&pi=1&ci=0`;
@@ -41,49 +49,69 @@ async function fetchViaAjax(searchTerm: string, cond: Condition): Promise<Brickl
     const data = JSON.parse(trimmed) as {
       result?: {
         typeList?: Array<{
+          type?: string;
           items?: Array<{
+            idItem?: number;
             strItemNo?: string;
             strItemName?: string;
-            strItemType?: string;
-            mSalesData?: Record<string, number>;
+            typeItem?: string;
+            n4UsedQty?: number;
+            n4NewQty?: number;
+            mUsedMinPrice?: string;
+            mUsedMaxPrice?: string;
+            mNewMinPrice?: string;
+            mNewMaxPrice?: string;
           }>;
         }>;
       };
     };
 
-    const items = data.result?.typeList?.flatMap(t => t.items ?? []) ?? [];
+    const typeList = data.result?.typeList ?? [];
+    if (typeList.length === 0) return null;
+
+    // Set-Typ bevorzugen ("S"), sonst erstes verfügbares
+    const setGroup = typeList.find(t => t.type === 'S');
+    const group = setGroup ?? typeList[0];
+    const items = group?.items ?? [];
     if (items.length === 0) return null;
 
     const item = items[0];
     const itemNo = item.strItemNo ?? '';
+    const itemId = item.idItem;
     if (!itemNo) return null;
 
-    // BrickLink AJAX liefert volle Typnamen ("SET", "MINIFIG", "PART") — in URL-Buchstaben umwandeln
-    const typeMap: Record<string, string> = {
-      SET: 'S', MINIFIG: 'M', PART: 'P', GEAR: 'G', BOOK: 'B', CATALOG: 'C', INSTRUCTION: 'I',
-      S: 'S', M: 'M', P: 'P', G: 'G', B: 'B', C: 'C', I: 'I',
-    };
-    const rawType = (item.strItemType ?? 'S') as string;
-    const itemType = typeMap[rawType.toUpperCase()] ?? 'S';
-    const sd = item.mSalesData ?? {};
+    const itemType = (item.typeItem ?? group?.type ?? 'S') as string;
 
-    // Prio aus Forschungsbericht: nCurAvgPrice (aktuell) > nAvgPrice (historisch) > neu/gebraucht variants
-    const avgPrice =
-      sd.nCurAvgPrice ?? sd.nAvgPrice ??
-      sd.nUsedAvgPrice ?? sd.nNewAvgPrice ?? 0;
-    const minPrice =
-      sd.nCurPrice ?? sd.nCurMinPrice ??
-      sd.nMinPrice ?? sd.nUsedMinPrice ?? sd.nNewMinPrice ?? 0;
-    const newAvgPrice = sd.nNewAvgPrice ?? undefined;
+    // Preise aus String-Feldern parsen (API liefert "EUR 4.00" statt Zahlen)
+    const usedMin = parseBlPrice(item.mUsedMinPrice);
+    const usedMax = parseBlPrice(item.mUsedMaxPrice);
+    const newMin = parseBlPrice(item.mNewMinPrice);
+    const newMax = parseBlPrice(item.mNewMaxPrice);
+
+    const hasUsed = (item.n4UsedQty ?? 0) > 0;
+    const hasNew = (item.n4NewQty ?? 0) > 0;
+
+    const minPrice = hasUsed && usedMin > 0 ? usedMin : (hasNew ? newMin : 0);
+    const avgPrice = hasUsed && usedMin > 0 && usedMax > 0
+      ? Math.round(((usedMin + usedMax) / 2) * 100) / 100
+      : (hasNew && newMin > 0 && newMax > 0 ? Math.round(((newMin + newMax) / 2) * 100) / 100 : 0);
+    const newAvgPrice = hasNew && newMin > 0 && newMax > 0
+      ? Math.round(((newMin + newMax) / 2) * 100) / 100
+      : undefined;
+
+    // URL: interne ID ist zuverlässiger als Set-Nummer
+    const itemUrl = itemId
+      ? `https://www.bricklink.com/v2/catalog/catalogitem.page?id=${itemId}`
+      : `https://www.bricklink.com/v2/catalog/catalogitem.page?${itemType}=${itemNo}`;
 
     return {
       name: item.strItemName ?? searchTerm,
       avgPrice,
       minPrice,
-      newAvgPrice: newAvgPrice !== undefined && newAvgPrice > 0 ? newAvgPrice : undefined,
+      newAvgPrice,
       itemId: itemNo,
       type: itemType,
-      url: `https://www.bricklink.com/v2/catalog/catalogitem.page?${itemType}=${itemNo}`,
+      url: itemUrl,
     };
   } catch {
     return null;
@@ -134,7 +162,7 @@ async function fetchViaCatalogSearch(query: string): Promise<BricklinkResult | n
 }
 
 export async function fetchBricklinkPrice(query: string): Promise<BricklinkResult | null> {
-  const cacheKey = `bricklink2_${query.toLowerCase().replace(/\s+/g, '_')}`;
+  const cacheKey = `bricklink3_${query.toLowerCase().replace(/\s+/g, '_')}`;
   const cached = await getCache<BricklinkResult>(cacheKey);
   if (cached) return cached;
 
