@@ -414,6 +414,23 @@ export default function ScanScreen() {
   const canScan = scanStats.scansToday < SCAN_RATE_LIMIT;
   const remainingScans = Math.max(0, SCAN_RATE_LIMIT - scanStats.scansToday);
 
+  const [resetCountdown, setResetCountdown] = useState('');
+  useEffect(() => {
+    const tick = () => {
+      const now = new Date();
+      const midnight = new Date(now);
+      midnight.setHours(24, 0, 0, 0);
+      const diff = Math.max(0, midnight.getTime() - now.getTime());
+      const h = Math.floor(diff / 3600000);
+      const m = Math.floor((diff % 3600000) / 60000);
+      const s = Math.floor((diff % 60000) / 1000);
+      setResetCountdown(`${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`);
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, []);
+
   useEffect(() => {
     if (params.textQuery) {
       setTextMode(true);
@@ -461,7 +478,7 @@ export default function ScanScreen() {
       const photo = await cameraRef.current.takePictureAsync({
         base64: false,
         quality: 0.8,
-        mute: true,
+        shutterSound: false,
       });
       if (!photo?.uri) throw new Error('Kein Foto aufgenommen');
       await processImage(photo.uri);
@@ -788,8 +805,13 @@ export default function ScanScreen() {
           {/* Remaining scans badge */}
           <View style={[styles.remainingBadge, { backgroundColor: theme.colors.surface + 'cc', top: insets.top + 72 }]}>
             <ThemedText size="xs" weight="semibold">
-              {remainingScans} Scans übrig
+              {remainingScans} verbleibend
             </ThemedText>
+            {resetCountdown ? (
+              <ThemedText size="xs" variant="muted" style={{ marginTop: 2 }}>
+                Reset {resetCountdown}
+              </ThemedText>
+            ) : null}
           </View>
 
           {/* Bottom bar: gallery left, capture center */}

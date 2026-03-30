@@ -97,7 +97,7 @@ export default function CardsScreen() {
     setPhase('capturing');
 
     try {
-      const photo = await cameraRef.current.takePictureAsync({ quality: 0.8, skipProcessing: true, mute: true });
+      const photo = await cameraRef.current.takePictureAsync({ quality: 0.8, skipProcessing: true, shutterSound: false });
       if (!photo?.uri) throw new Error('no photo');
 
       setPhase('processing');
