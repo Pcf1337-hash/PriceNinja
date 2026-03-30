@@ -31,7 +31,12 @@ export default function LoginScreen() {
 
   const scope = accountType === 'papa'
     ? 'https://api.ebay.com/oauth/api_scope'
-    : 'https://api.ebay.com/oauth/api_scope https://api.ebay.com/oauth/api_scope/sell.inventory';
+    : [
+        'https://api.ebay.com/oauth/api_scope',
+        'https://api.ebay.com/oauth/api_scope/sell.inventory',
+        'https://api.ebay.com/oauth/api_scope/sell.account',
+        'https://api.ebay.com/oauth/api_scope/sell.fulfillment',
+      ].join(' ');
 
   const handleLogin = async () => {
     if (!APP_ID || !CERT_ID || !RU_NAME) {
@@ -75,6 +80,7 @@ export default function LoginScreen() {
         username: accountType === 'papa' ? 'Papa' : 'Mein Account',
         appId: APP_ID,
         certId: CERT_ID,
+        devId: (ENV.ebayDevId as string) || undefined,
         ruName: RU_NAME,
         accessToken: tokens.accessToken,
         refreshToken: tokens.refreshToken,

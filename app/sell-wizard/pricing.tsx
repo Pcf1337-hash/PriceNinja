@@ -18,6 +18,13 @@ type ListingType = 'Festpreis' | 'Auktion';
 const SHIPPING_OPTIONS: ShippingOption[] = ['Kostenlos', '3,99 €', '5,99 €', '8,99 €'];
 const DURATIONS: Duration[] = ['7 Tage', '10 Tage', '30 Tage'];
 
+// eBay DE Privatverkäufer-Gebühren (Stand 2024)
+const EBAY_FEE_RATE = 0.139; // 13,9% vom Gesamtbetrag
+
+function calcEbayFee(itemPrice: number, shippingCost: number): number {
+  return (itemPrice + shippingCost) * EBAY_FEE_RATE;
+}
+
 export default function SellWizardPricing() {
   const { theme } = useTheme();
   const insets = useSafeAreaInsets();
@@ -29,6 +36,7 @@ export default function SellWizardPricing() {
     condition: string;
     title: string;
     description: string;
+    photoUris: string;
   }>();
 
   const suggestedNum = parseFloat(params.suggestedPrice ?? '0') || 0;
@@ -43,6 +51,12 @@ export default function SellWizardPricing() {
     suggestedNum > 0 ? (suggestedNum * 0.6).toFixed(2) : ''
   );
 
+  const priceNum = parseFloat(price) || 0;
+  const shippingNum = shipping === 'Kostenlos' ? 0
+    : parseFloat(shipping.replace(',', '.').replace(' €', '')) || 0;
+  const ebayFee = calcEbayFee(priceNum, shippingNum);
+  const netEarnings = priceNum - ebayFee;
+
   const handleNext = () => {
     router.push({
       pathname: '/sell-wizard/review',
@@ -53,6 +67,7 @@ export default function SellWizardPricing() {
         duration,
         listingType,
         startPrice: listingType === 'Auktion' ? startPrice : '',
+        photoUris: params.photoUris ?? '[]',
       },
     });
   };
@@ -235,6 +250,40 @@ export default function SellWizardPricing() {
           ))}
         </View>
 
+        {/* ── Geschätzte Gebühren ── */}
+        {priceNum > 0 && (
+          <>
+            <ThemedText weight="semibold" style={styles.label}>
+              Geschätzte Gebühren
+            </ThemedText>
+            <GlowCard style={[styles.inputCard, { gap: 8 }]}>
+              <View style={styles.feeRow}>
+                <ThemedText variant="secondary" size="sm">Verkaufspreis</ThemedText>
+                <ThemedText weight="semibold">€ {priceNum.toFixed(2)}</ThemedText>
+              </View>
+              {shippingNum > 0 && (
+                <View style={styles.feeRow}>
+                  <ThemedText variant="secondary" size="sm">+ Versand</ThemedText>
+                  <ThemedText>€ {shippingNum.toFixed(2)}</ThemedText>
+                </View>
+              )}
+              <View style={[styles.feeRow, { paddingTop: 8, borderTopWidth: 1, borderTopColor: theme.colors.border }]}>
+                <ThemedText variant="secondary" size="sm">eBay Gebühr (13,9%)</ThemedText>
+                <ThemedText style={{ color: theme.colors.error }}>- € {ebayFee.toFixed(2)}</ThemedText>
+              </View>
+              <View style={[styles.feeRow, { paddingTop: 4 }]}>
+                <ThemedText weight="bold">Nettoerlös</ThemedText>
+                <ThemedText weight="bold" size="lg" style={{ color: netEarnings >= 0 ? theme.colors.success : theme.colors.error }}>
+                  € {netEarnings.toFixed(2)}
+                </ThemedText>
+              </View>
+              <ThemedText variant="muted" size="xs" style={{ marginTop: 4 }}>
+                Privatverkauf · Keine Angebotsgebühr (erste 250/Monat gratis)
+              </ThemedText>
+            </GlowCard>
+          </>
+        )}
+
         <PrimaryButton
           title="Weiter: Überprüfen"
           size="lg"
@@ -306,5 +355,10 @@ const styles = StyleSheet.create({
   },
   nextButton: {
     marginTop: 28,
+  },
+  feeRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
   },
 });

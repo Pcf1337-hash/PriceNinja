@@ -256,51 +256,201 @@ export async function exchangeAuthCode(
   };
 }
 
-// ─── Sell API (Listings) ───────────────────────────────────────────────────────
+// ─── Trading API helpers ───────────────────────────────────────────────────────
+
+const TRADING_API_URL = 'https://api.ebay.com/ws/api.dll';
+const TRADING_API_SANDBOX_URL = 'https://api.sandbox.ebay.com/ws/api.dll';
+
+function tradingApiHeaders(
+  account: EbayAccount,
+  callName: string
+): Record<string, string> {
+  return {
+    'X-EBAY-API-CALL-NAME': callName,
+    'X-EBAY-API-SITEID': '77', // Germany
+    'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
+    'X-EBAY-API-APP-NAME': account.appId,
+    'X-EBAY-API-DEV-NAME': account.devId ?? account.appId,
+    'X-EBAY-API-CERT-NAME': account.certId,
+  };
+}
+
+function escapeXml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+// ─── Upload Image to eBay Picture Services ────────────────────────────────────
+
+export async function uploadImageToEbay(
+  account: EbayAccount,
+  localUri: string
+): Promise<string> {
+  const token = await getSellToken(account);
+  const apiUrl = account.isSandbox ? TRADING_API_SANDBOX_URL : TRADING_API_URL;
+
+  const xml = `<?xml version="1.0" encoding="utf-8"?>
+<UploadSiteHostedPicturesRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+  <RequesterCredentials>
+    <eBayAuthToken>${token}</eBayAuthToken>
+  </RequesterCredentials>
+  <PictureName>listing-photo</PictureName>
+  <PictureSet>Supersize</PictureSet>
+</UploadSiteHostedPicturesRequest>`;
+
+  const formData = new FormData();
+  // eBay requires the XML part to be named "XML Payload"
+  formData.append('XML Payload', { uri: 'data:text/xml,' + encodeURIComponent(xml), type: 'text/xml', name: 'payload.xml' } as unknown as Blob);
+  formData.append('image', { uri: localUri, type: 'image/jpeg', name: 'photo.jpg' } as unknown as Blob);
+
+  const response = await fetch(apiUrl, {
+    method: 'POST',
+    headers: tradingApiHeaders(account, 'UploadSiteHostedPictures'),
+    body: formData,
+  });
+
+  if (!response.ok) {
+    throw new Error(`Foto-Upload fehlgeschlagen: HTTP ${response.status}`);
+  }
+
+  const text = await response.text();
+  const urlMatch = text.match(/<FullURL>(https?:\/\/[^<]+)<\/FullURL>/);
+  if (!urlMatch?.[1]) {
+    const errMatch = text.match(/<ShortMessage>([^<]+)<\/ShortMessage>/);
+    throw new Error(`Foto-Upload fehlgeschlagen: ${errMatch?.[1] ?? 'Kein URL in Antwort'}`);
+  }
+  return urlMatch[1];
+}
+
+// ─── Sell API — Trading API AddFixedPriceItem ─────────────────────────────────
+
+export interface EbayListingRequest {
+  title: string;
+  description: string;
+  condition: string;       // 'Neu' | 'Wie Neu' | 'Sehr Gut' | 'Gut' | 'Akzeptabel'
+  price: number;
+  listingType: 'Festpreis' | 'Auktion';
+  startPrice?: number;     // nur bei Auktion
+  shippingCost: number;    // 0 für kostenlos
+  duration: '7 Tage' | '10 Tage' | '30 Tage';
+  imageUrls: string[];     // eBay-hosted or external public URLs
+  categoryId?: string;
+}
 
 export async function createEbayListing(
   account: EbayAccount,
-  draft: EbayListingDraft
-): Promise<{ listingId: string; listingUrl: string }> {
+  req: EbayListingRequest
+): Promise<{ listingId: string; listingUrl: string; estimatedFees?: number }> {
   if (account.type === 'papa') {
     throw new Error('Papa-Account kann keine Listings erstellen!');
   }
 
   const token = await getSellToken(account);
-  const baseUrl = account.isSandbox ? EBAY_SANDBOX_BASE_URL : EBAY_PROD_BASE_URL;
+  const apiUrl = account.isSandbox ? TRADING_API_SANDBOX_URL : TRADING_API_URL;
 
-  const body = {
-    sku: `emio-${Date.now()}`,
-    product: {
-      title: draft.title,
-      description: draft.description,
-      imageUrls: draft.imageUrls,
-    },
-    condition: draft.condition,
-    availability: {
-      shipToLocationAvailability: {
-        quantity: draft.quantity,
-      },
-    },
+  const conditionMap: Record<string, number> = {
+    'Neu': 1000,
+    'Wie Neu': 3000,
+    'Sehr Gut': 3000,
+    'Gut': 5000,
+    'Akzeptabel': 6000,
   };
+  const conditionId = conditionMap[req.condition] ?? 3000;
 
-  const response = await fetch(`${baseUrl}/sell/inventory/v1/inventory_item/emio-${Date.now()}`, {
-    method: 'PUT',
+  const durationMap: Record<string, string> = {
+    '7 Tage': 'Days_7',
+    '10 Tage': 'Days_10',
+    '30 Tage': 'GTC',
+  };
+  const listingDuration = durationMap[req.duration] ?? 'Days_7';
+
+  const picturesXml = req.imageUrls.length > 0
+    ? `<PictureDetails>\n      ${req.imageUrls.map(u => `<PictureURL>${escapeXml(u)}</PictureURL>`).join('\n      ')}\n    </PictureDetails>`
+    : '';
+
+  const shippingXml = req.shippingCost === 0
+    ? `<ShippingDetails>
+      <ShippingType>Free</ShippingType>
+      <ShippingServiceOptions>
+        <ShippingServicePriority>1</ShippingServicePriority>
+        <ShippingService>DE_DHLPaket</ShippingService>
+        <ShippingServiceCost>0.00</ShippingServiceCost>
+        <FreeShipping>true</FreeShipping>
+      </ShippingServiceOptions>
+    </ShippingDetails>`
+    : `<ShippingDetails>
+      <ShippingType>Flat</ShippingType>
+      <ShippingServiceOptions>
+        <ShippingServicePriority>1</ShippingServicePriority>
+        <ShippingService>DE_DHLPaket</ShippingService>
+        <ShippingServiceCost>${req.shippingCost.toFixed(2)}</ShippingServiceCost>
+      </ShippingServiceOptions>
+    </ShippingDetails>`;
+
+  const isAuction = req.listingType === 'Auktion';
+  const startPrice = isAuction && req.startPrice ? req.startPrice : req.price;
+
+  const xml = `<?xml version="1.0" encoding="utf-8"?>
+<AddFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+  <RequesterCredentials>
+    <eBayAuthToken>${token}</eBayAuthToken>
+  </RequesterCredentials>
+  <Item>
+    <Title>${escapeXml(req.title.slice(0, 80))}</Title>
+    <Description><![CDATA[${req.description}]]></Description>
+    <PrimaryCategory>
+      <CategoryID>${req.categoryId ?? '99'}</CategoryID>
+    </PrimaryCategory>
+    <StartPrice>${startPrice.toFixed(2)}</StartPrice>
+    ${isAuction && req.price ? `<BuyItNowPrice>${req.price.toFixed(2)}</BuyItNowPrice>` : ''}
+    <ConditionID>${conditionId}</ConditionID>
+    <Country>DE</Country>
+    <Currency>EUR</Currency>
+    <DispatchTimeMax>3</DispatchTimeMax>
+    <ListingDuration>${listingDuration}</ListingDuration>
+    <ListingType>FixedPriceItem</ListingType>
+    ${picturesXml}
+    <Quantity>1</Quantity>
+    <ReturnPolicy>
+      <ReturnsAcceptedOption>ReturnsNotAccepted</ReturnsAcceptedOption>
+    </ReturnPolicy>
+    ${shippingXml}
+    <Site>Germany</Site>
+  </Item>
+</AddFixedPriceItemRequest>`;
+
+  const response = await fetch(apiUrl, {
+    method: 'POST',
     headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      'Content-Language': 'de-DE',
+      ...tradingApiHeaders(account, 'AddFixedPriceItem'),
+      'Content-Type': 'text/xml',
     },
-    body: JSON.stringify(body),
+    body: xml,
   });
 
-  if (!response.ok) {
-    throw new Error(`eBay listing creation failed: ${response.status}`);
+  const text = await response.text();
+
+  const ack = text.match(/<Ack>(.*?)<\/Ack>/)?.[1];
+  const itemId = text.match(/<ItemID>(\d+)<\/ItemID>/)?.[1];
+  const errMsg = text.match(/<ShortMessage>(.*?)<\/ShortMessage>/)?.[1];
+  const feeStr = text.match(/<Fee>(\d+\.?\d*)<\/Fee>/)?.[1];
+
+  if (ack === 'Failure' || (!itemId && !response.ok)) {
+    throw new Error(errMsg ?? `Angebot konnte nicht erstellt werden (${response.status})`);
+  }
+
+  if (!itemId) {
+    throw new Error(errMsg ?? 'Keine Item-ID in Antwort erhalten');
   }
 
   return {
-    listingId: `emio-${Date.now()}`,
-    listingUrl: `https://www.ebay.de/itm/emio-${Date.now()}`,
+    listingId: itemId,
+    listingUrl: `https://www.ebay.de/itm/${itemId}`,
+    estimatedFees: feeStr ? parseFloat(feeStr) : undefined,
   };
 }
 

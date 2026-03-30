@@ -473,7 +473,7 @@ export default function CardsScreen() {
                   </TouchableOpacity>
                 </View>
 
-                <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
+                <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 40 }} showsVerticalScrollIndicator={false}>
                   {/* Photo */}
                   {selectedCard && (selectedCard.prices?.cardImageUrl || selectedCard.imageUri) && (
                     <View style={{ alignItems: 'center', marginBottom: 16 }}>
