@@ -216,20 +216,20 @@ export async function fetchBricklinkPrice(query: string): Promise<BricklinkResul
   return null;
 }
 
-// Holt die ersten 10 Einzelangebote von BrickLink für ein Item
+// Holt Marktangebote von BrickLink via searchproduct.ajax (st=1 = Stores)
+// Gibt Gebraucht/Neu als je eine Zeile zurück (Preisrange + Anzahl Anbieter)
 export async function fetchBricklinkListings(
   itemNo: string,
   itemType: string = 'S',
-  itemId?: string,
+  _itemId?: string,
 ): Promise<BricklinkListing[]> {
-  const cacheKey = `bllist3_${itemType}_${itemNo}`;
+  const cacheKey = `bllist4_${itemType}_${itemNo}`;
   const cached = await getCache<BricklinkListing[]>(cacheKey);
   if (cached) return cached;
 
   try {
-    // BrickLink store search AJAX — liefert individuelle Verkaufsangebote
-    const idParam = itemId ? `&itemId=${itemId}` : '';
-    const url = `https://www.bricklink.com/ajax/clone/store/searchInventory.ajax?itemType=${itemType}&itemNo=${encodeURIComponent(itemNo)}&colorId=0&cond=&rpp=10&pi=1${idParam}`;
+    // st=1 = Store-Suche (aktive Angebote), liefert Qty + Preisrange pro Zustand
+    const url = `https://www.bricklink.com/ajax/clone/search/searchproduct.ajax?q=${encodeURIComponent(itemNo)}&st=1&cond=&type=${itemType}&cat=&yf=0&yt=0&loc=&reg=0&ca=0&ss=0&pmt=&nmp=0&color=-1&min=0&max=0&minqty=0&nosale=0&showempty=1&rpp=5&pi=1&ci=0`;
     const res = await fetch(url, { headers: BROWSER_HEADERS });
     if (!res.ok) return [];
     const text = await res.text();
@@ -237,28 +237,57 @@ export async function fetchBricklinkListings(
 
     const data = JSON.parse(text) as {
       result?: {
-        list?: Array<{
-          strStorename?: string;
-          strSellerUsername?: string;
-          mDisplaySalesPrice?: string;
-          mSalesPrice?: string;
-          strCond?: string;
-          n4Qty?: number;
-          strCountry?: string;
-          strCountryCode?: string;
+        typeList?: Array<{
+          type?: string;
+          items?: Array<{
+            strItemNo?: string;
+            n4UsedQty?: number;
+            n4UsedSellerCnt?: number;
+            mUsedMinPrice?: string;
+            mUsedMaxPrice?: string;
+            n4NewQty?: number;
+            n4NewSellerCnt?: number;
+            mNewMinPrice?: string;
+            mNewMaxPrice?: string;
+          }>;
         }>;
       };
     };
 
-    const items = data.result?.list ?? [];
-    const listings: BricklinkListing[] = items.slice(0, 10).map(it => ({
-      sellerName: it.strStorename ?? it.strSellerUsername ?? '?',
-      price: parseBlPrice(it.mDisplaySalesPrice ?? it.mSalesPrice),
-      currency: 'EUR',
-      condition: it.strCond === 'U' ? 'Gebraucht' : it.strCond === 'N' ? 'Neu' : (it.strCond ?? '?'),
-      qty: it.n4Qty ?? 1,
-      location: it.strCountry ?? it.strCountryCode ?? '',
-    })).filter(l => l.price > 0);
+    const typeList = data.result?.typeList ?? [];
+    const group = typeList.find(t => t.type === itemType) ?? typeList[0];
+    const item = group?.items?.[0];
+    if (!item) return [];
+
+    const listings: BricklinkListing[] = [];
+
+    const usedQty = item.n4UsedQty ?? 0;
+    const usedMin = parseBlPrice(item.mUsedMinPrice);
+    const usedMax = parseBlPrice(item.mUsedMaxPrice);
+    if (usedQty > 0 && usedMin > 0) {
+      listings.push({
+        sellerName: `${item.n4UsedSellerCnt ?? '?'} Anbieter`,
+        price: usedMin,
+        currency: 'EUR',
+        condition: 'Gebraucht',
+        qty: usedQty,
+        location: usedMax > usedMin ? `bis ${usedMax.toFixed(2).replace('.', ',')} €` : '',
+      });
+    }
+
+    const newQty = item.n4NewQty ?? 0;
+    const newMin = parseBlPrice(item.mNewMinPrice);
+    const newMax = parseBlPrice(item.mNewMaxPrice);
+    if (newQty > 0 && newMin > 0) {
+      listings.push({
+        sellerName: `${item.n4NewSellerCnt ?? '?'} Anbieter`,
+        price: newMin,
+        currency: 'EUR',
+        condition: 'Neu',
+        qty: newQty,
+        location: newMax > newMin ? `bis ${newMax.toFixed(2).replace('.', ',')} €` : '',
+      });
+    }
 
     if (listings.length > 0) {
       await setCache(cacheKey, listings, CACHE_TTL);

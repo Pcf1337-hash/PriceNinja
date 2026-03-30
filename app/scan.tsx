@@ -525,7 +525,7 @@ export default function ScanScreen() {
 
       const [geizhals, bricklink] = await Promise.all([
         fetchGeizhalsPrice(claudeResult.searchQuery),
-        fetchBricklinkPrice(claudeResult.searchQuery),
+        claudeResult.isLegoOrBricks ? fetchBricklinkPrice(claudeResult.searchQuery) : Promise.resolve(null),
       ]);
 
       // Wenn kein eigenes Foto (Textsuche), erstes eBay-Bild als Thumbnail nehmen
@@ -547,10 +547,6 @@ export default function ScanScreen() {
           : null
       );
       setScanState('prices-ready');
-      // Auto-open LEGO modal when bricks detected
-      if (claudeResult.isLegoOrBricks) {
-        setLegoModalOpen(true);
-      }
     } catch {
       setScanState('confirming');
       Alert.alert('Preisabfrage fehlgeschlagen', 'Preise konnten nicht abgerufen werden.');

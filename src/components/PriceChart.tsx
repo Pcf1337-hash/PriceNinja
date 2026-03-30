@@ -49,7 +49,7 @@ export function PriceChart({
       .filter((p) => p.value > 0);
   }, [soldListings, data, valueKey]);
 
-  if (points.length < 2) {
+  if (points.length < 1) {
     return (
       <View style={styles.empty}>
         <ThemedText variant="muted" size="xs" style={{ textAlign: 'center' }}>
@@ -65,22 +65,35 @@ export function PriceChart({
   const values = points.map((p) => p.value);
   const minV = Math.min(...values) * 0.95;
   const maxV = Math.max(...values) * 1.05;
-  const minT = Math.min(...points.map((p) => p.ts));
-  const maxT = Math.max(...points.map((p) => p.ts));
-  const tRange = maxT - minT || 1;
+
+  // Feste 2-Jahres-Zeitachse: immer von (heute - 2 Jahre) bis heute
+  const maxT = Date.now();
+  const minT = maxT - 2 * 365 * 24 * 60 * 60 * 1000;
+  const tRange = maxT - minT;
 
   const toX = (ts: number) => PADDING.left + ((ts - minT) / tRange) * chartW;
   const toY = (v: number) =>
     PADDING.top + chartH - ((v - minV) / (maxV - minV)) * chartH;
 
-  const polyPoints = points.map((p) => `${toX(p.ts)},${toY(p.value)}`).join(' ');
+  // Nur Punkte innerhalb des 2-Jahres-Fensters anzeigen
+  const visiblePoints = points.filter(p => p.ts >= minT && p.ts <= maxT);
+  const polyPoints = visiblePoints.map((p) => `${toX(p.ts)},${toY(p.value)}`).join(' ');
 
   // Y axis labels (3 levels)
   const yLabels = [minV, (minV + maxV) / 2, maxV];
 
-  // X axis labels (first and last date)
+  // X-Achse: Jahresmarker alle 12 Monate
   const fmtDate = (ts: number) =>
-    new Date(ts).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' });
+    new Date(ts).toLocaleDateString('de-DE', { month: 'short', year: '2-digit' });
+
+  // Jahresmarker: jeden 1. Jan innerhalb des Fensters
+  const yearMarkers: number[] = [];
+  const startYear = new Date(minT).getFullYear();
+  const endYear = new Date(maxT).getFullYear();
+  for (let y = startYear; y <= endYear; y++) {
+    const ts = new Date(y, 0, 1).getTime();
+    if (ts >= minT && ts <= maxT) yearMarkers.push(ts);
+  }
 
   const color = valueKey === 'ebaySoldAvg' ? theme.colors.primary : theme.colors.success;
 
@@ -114,18 +127,44 @@ export function PriceChart({
           </React.Fragment>
         ))}
 
+        {/* Jahresmarker (vertikale Linien) */}
+        {yearMarkers.map((ts) => (
+          <React.Fragment key={ts}>
+            <Line
+              x1={toX(ts)}
+              y1={PADDING.top}
+              x2={toX(ts)}
+              y2={height - PADDING.bottom}
+              stroke={theme.colors.border}
+              strokeWidth={1}
+              strokeDasharray="3,5"
+            />
+            <SvgText
+              x={toX(ts)}
+              y={height - 6}
+              fontSize={9}
+              fill={theme.colors.textMuted ?? theme.colors.text + '88'}
+              textAnchor="middle"
+            >
+              {new Date(ts).getFullYear().toString()}
+            </SvgText>
+          </React.Fragment>
+        ))}
+
         {/* Line */}
-        <Polyline
-          points={polyPoints}
-          fill="none"
-          stroke={color}
-          strokeWidth={2}
-          strokeLinejoin="round"
-          strokeLinecap="round"
-        />
+        {visiblePoints.length >= 2 && (
+          <Polyline
+            points={polyPoints}
+            fill="none"
+            stroke={color}
+            strokeWidth={2}
+            strokeLinejoin="round"
+            strokeLinecap="round"
+          />
+        )}
 
         {/* Data points */}
-        {points.map((p, i) => (
+        {visiblePoints.map((p, i) => (
           <Circle
             key={i}
             cx={toX(p.ts)}
@@ -135,9 +174,9 @@ export function PriceChart({
           />
         ))}
 
-        {/* X axis labels */}
+        {/* X-Achse: Start- und Endlabel */}
         <SvgText
-          x={toX(minT)}
+          x={PADDING.left}
           y={height - 6}
           fontSize={9}
           fill={theme.colors.textMuted ?? theme.colors.text + '88'}
@@ -146,7 +185,7 @@ export function PriceChart({
           {fmtDate(minT)}
         </SvgText>
         <SvgText
-          x={toX(maxT)}
+          x={width - PADDING.right}
           y={height - 6}
           fontSize={9}
           fill={theme.colors.textMuted ?? theme.colors.text + '88'}

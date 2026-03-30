@@ -359,7 +359,7 @@ export default function ItemDetailScreen() {
               <ThemedText variant="muted" size="xs" weight="semibold" style={{ letterSpacing: 1, color: '#e3000b' }}>
                 BRICKLINK ANGEBOTE
               </ThemedText>
-              <ThemedText variant="muted" size="xs">{blListings.length} Angebote</ThemedText>
+              <ThemedText variant="muted" size="xs">{blListings.reduce((s, l) => s + l.qty, 0)} verfügbar</ThemedText>
             </View>
             <ScrollView
               style={{ maxHeight: 5 * 44 }}
@@ -372,12 +372,17 @@ export default function ItemDetailScreen() {
                   style={[styles.listingRow, { borderTopColor: theme.colors.border }, i === 0 && { borderTopWidth: 0 }]}
                 >
                   <View style={{ flex: 1 }}>
-                    <ThemedText size="sm" numberOfLines={1}>{listing.sellerName}</ThemedText>
-                    <ThemedText variant="muted" size="xs">{listing.condition} · {listing.location} · Qty: {listing.qty}</ThemedText>
+                    <ThemedText size="sm" numberOfLines={1}>{listing.condition}</ThemedText>
+                    <ThemedText variant="muted" size="xs">{listing.sellerName} · {listing.qty} Stück</ThemedText>
                   </View>
-                  <ThemedText weight="bold" size="sm" style={{ color: '#e3000b' }}>
-                    {listing.price.toFixed(2)} €
-                  </ThemedText>
+                  <View style={{ alignItems: 'flex-end' }}>
+                    <ThemedText weight="bold" size="sm" style={{ color: '#e3000b' }}>
+                      ab {listing.price.toFixed(2).replace('.', ',')} €
+                    </ThemedText>
+                    {listing.location ? (
+                      <ThemedText variant="muted" size="xs">{listing.location}</ThemedText>
+                    ) : null}
+                  </View>
                 </View>
               ))}
             </ScrollView>
