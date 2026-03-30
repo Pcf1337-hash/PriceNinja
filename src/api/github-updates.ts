@@ -51,15 +51,13 @@ export async function checkForUpdate(
       (a) => (a.name as string).endsWith('.apk')
     );
 
-    if (!apkAsset) return null;
-
     return {
       version: latestVersion,
       tagName: release.tag_name as string,
       releaseNotes: release.body as string ?? '',
       publishedAt: release.published_at as string,
-      apkUrl: apkAsset.browser_download_url as string,
-      apkSize: apkAsset.size as number,
+      apkUrl: apkAsset?.browser_download_url as string ?? '',
+      apkSize: apkAsset?.size as number ?? 0,
     };
   } catch {
     return null;
