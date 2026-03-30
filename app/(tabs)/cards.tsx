@@ -11,6 +11,7 @@ import {
   Image,
   Linking,
   ScrollView,
+  Modal,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -53,6 +54,7 @@ export default function CardsScreen() {
   const { claudeApiKey, pokemonTcgApiKey, incrementCardScanCount, scanStats } = useSettingsStore();
   const canScan = scanStats.cardScansToday < CARD_SCAN_RATE_LIMIT;
   const { cards, addCard, removeCard, toggleFavorite } = useCardStore();
+  const [selectedCard, setSelectedCard] = useState<TradingCard | null>(null);
 
   // Stop any active work when tab loses focus
   useFocusEffect(
@@ -244,8 +246,8 @@ export default function CardsScreen() {
               <Text style={styles.headerBrandText}>PriceNinja</Text>
               <Text style={styles.headerSubText}>Card Scanner · {CARD_SCAN_RATE_LIMIT - scanStats.cardScansToday} übrig</Text>
             </View>
-            <TouchableOpacity onPress={() => setPhase('history')} style={styles.headerRightBtn} accessibilityLabel="Kartenverlauf">
-              <Text style={styles.headerRightText}>Verlauf</Text>
+            <TouchableOpacity onPress={() => setPhase('history')} style={styles.headerRightBtn} accessibilityLabel="Gespeicherte Karten">
+              <Text style={styles.headerRightText}>Saved</Text>
             </TouchableOpacity>
           </View>
 
@@ -377,7 +379,7 @@ export default function CardsScreen() {
             <TouchableOpacity onPress={() => setPhase('ready')} style={{ width: 80 }} accessibilityLabel="Zurück zum Scanner">
               <Text style={[styles.historyBackText, { color: theme.colors.primary }]}>← Scanner</Text>
             </TouchableOpacity>
-            <ThemedText weight="bold" size="xl">Kartenverlauf</ThemedText>
+            <ThemedText weight="bold" size="xl">Saved Cards</ThemedText>
             <View style={{ width: 80 }} />
           </View>
 
@@ -385,29 +387,43 @@ export default function CardsScreen() {
             data={cards}
             keyExtractor={(c) => c.id}
             renderItem={({ item }) => (
-              <GlowCard style={{ marginHorizontal: 16, marginVertical: 6 }}>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <View style={{ flex: 1 }}>
-                    <ThemedText weight="semibold">{item.name}</ThemedText>
-                    <ThemedText variant="secondary" size="sm">
-                      {item.game.toUpperCase()} · {item.setName ?? 'Unbekanntes Set'}
-                    </ThemedText>
-                    {item.prices?.cardmarketLow && (
-                      <ThemedText style={{ color: theme.colors.primary, fontWeight: 'bold' }}>
-                        ab {formatPrice(item.prices.cardmarketLow)}
-                      </ThemedText>
+              <TouchableOpacity onPress={() => setSelectedCard(item)} activeOpacity={0.75}>
+                <GlowCard style={{ marginHorizontal: 16, marginVertical: 6 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                    {/* Thumbnail */}
+                    {(item.imageUri || item.prices?.cardImageUrl) ? (
+                      <Image
+                        source={{ uri: item.prices?.cardImageUrl ?? item.imageUri }}
+                        style={{ width: 48, height: 67, borderRadius: 4 }}
+                        resizeMode="cover"
+                      />
+                    ) : (
+                      <View style={{ width: 48, height: 67, borderRadius: 4, backgroundColor: theme.colors.surface, alignItems: 'center', justifyContent: 'center' }}>
+                        <Text style={{ fontSize: 22 }}>{item.game === 'pokemon' ? '⚡' : item.game === 'yugioh' ? '👁' : '⚔️'}</Text>
+                      </View>
                     )}
+                    <View style={{ flex: 1 }}>
+                      <ThemedText weight="semibold" numberOfLines={1}>{item.name}</ThemedText>
+                      <ThemedText variant="secondary" size="sm">
+                        {item.game.toUpperCase()} · {item.setName ?? 'Unbekanntes Set'}
+                      </ThemedText>
+                      {item.prices?.cardmarketLow && (
+                        <ThemedText style={{ color: theme.colors.primary, fontWeight: 'bold' }}>
+                          ab {formatPrice(item.prices.cardmarketLow)}
+                        </ThemedText>
+                      )}
+                    </View>
+                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                      <TouchableOpacity onPress={() => toggleFavorite(item.id)} accessibilityLabel={item.isFavorite ? 'Aus Favoriten entfernen' : 'Zu Favoriten'}>
+                        <Text style={{ fontSize: 22 }}>{item.isFavorite ? '⭐' : '☆'}</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity onPress={() => { Alert.alert('Löschen', `"${item.name}" löschen?`, [{ text: 'Abbrechen', style: 'cancel' }, { text: 'Löschen', style: 'destructive', onPress: () => removeCard(item.id) }]); }} accessibilityLabel="Karte löschen">
+                        <Text style={{ fontSize: 22 }}>🗑️</Text>
+                      </TouchableOpacity>
+                    </View>
                   </View>
-                  <View style={{ flexDirection: 'row', gap: 8 }}>
-                    <TouchableOpacity onPress={() => toggleFavorite(item.id)} accessibilityLabel={item.isFavorite ? 'Aus Favoriten entfernen' : 'Zu Favoriten'}>
-                      <Text style={{ fontSize: 24 }}>{item.isFavorite ? '⭐' : '☆'}</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity onPress={() => removeCard(item.id)} accessibilityLabel="Karte löschen">
-                      <Text style={{ fontSize: 24 }}>🗑️</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              </GlowCard>
+                </GlowCard>
+              </TouchableOpacity>
             )}
             ListEmptyComponent={
               <View style={{ alignItems: 'center', paddingVertical: 60 }}>
@@ -418,6 +434,133 @@ export default function CardsScreen() {
             }
             showsVerticalScrollIndicator={false}
           />
+
+          {/* Card Detail Modal */}
+          <Modal
+            visible={selectedCard !== null}
+            animationType="slide"
+            transparent
+            onRequestClose={() => setSelectedCard(null)}
+          >
+            <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' }}>
+              <View style={{ backgroundColor: theme.colors.background, borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: '92%' }}>
+                {/* Modal Header */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderBottomWidth: 1, borderBottomColor: theme.colors.border }}>
+                  <ThemedText weight="bold" size="lg" numberOfLines={1} style={{ flex: 1 }}>{selectedCard?.name}</ThemedText>
+                  <TouchableOpacity onPress={() => setSelectedCard(null)} style={{ paddingLeft: 12 }}>
+                    <Text style={{ color: theme.colors.textSecondary, fontSize: 22 }}>✕</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
+                  {/* Photo */}
+                  {selectedCard && (selectedCard.prices?.cardImageUrl || selectedCard.imageUri) && (
+                    <View style={{ alignItems: 'center', marginBottom: 16 }}>
+                      <Image
+                        source={{ uri: selectedCard.prices?.cardImageUrl ?? selectedCard.imageUri }}
+                        style={{ width: 200, height: 280, borderRadius: 10 }}
+                        resizeMode="contain"
+                      />
+                    </View>
+                  )}
+
+                  {/* Card Info */}
+                  {selectedCard && (
+                    <GlowCard style={{ marginBottom: 12 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                        <Text style={{ fontSize: 22 }}>{selectedCard.game === 'pokemon' ? '⚡' : selectedCard.game === 'yugioh' ? '👁' : '⚔️'}</Text>
+                        <ThemedText weight="bold" size="lg" style={{ flex: 1 }}>{selectedCard.name}</ThemedText>
+                        {selectedCard.isFavorite && <Text style={{ fontSize: 18 }}>⭐</Text>}
+                      </View>
+                      <ThemedText variant="secondary" size="sm">{selectedCard.game.toUpperCase()}</ThemedText>
+                      {selectedCard.setName && <ThemedText variant="muted" size="sm" style={{ marginTop: 4 }}>Set: {selectedCard.setName}</ThemedText>}
+                      {selectedCard.cardNumber && <ThemedText variant="muted" size="sm">Nr: {selectedCard.cardNumber}</ThemedText>}
+                      {selectedCard.rarity && <ThemedText variant="muted" size="sm">Seltenheit: {selectedCard.rarity}</ThemedText>}
+                      {selectedCard.condition && <ThemedText variant="muted" size="sm">Zustand: {selectedCard.condition}</ThemedText>}
+                      <ThemedText variant="muted" size="xs" style={{ marginTop: 6 }}>
+                        Gescannt: {new Date(selectedCard.scannedAt).toLocaleDateString('de-DE')}
+                      </ThemedText>
+                    </GlowCard>
+                  )}
+
+                  {/* Cardmarket Preise */}
+                  {selectedCard?.prices && (
+                    <TouchableOpacity
+                      onPress={() => selectedCard.prices?.cardmarketUrl && Linking.openURL(selectedCard.prices.cardmarketUrl)}
+                      activeOpacity={selectedCard.prices.cardmarketUrl ? 0.75 : 1}
+                    >
+                      <GlowCard style={{ marginBottom: 12, borderColor: theme.colors.primary + '44', borderWidth: 1 }}>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                          <ThemedText weight="semibold">Cardmarket</ThemedText>
+                          {selectedCard.prices.cardmarketUrl && <Text style={{ color: theme.colors.primary, fontSize: 12 }}>Öffnen →</Text>}
+                        </View>
+                        {selectedCard.prices.cardmarketLow && (
+                          <View style={styles.priceRow}>
+                            <ThemedText variant="muted" size="sm">Niedrigster Preis</ThemedText>
+                            <ThemedText weight="bold" style={{ color: theme.colors.primary }}>{formatPrice(selectedCard.prices.cardmarketLow)}</ThemedText>
+                          </View>
+                        )}
+                        {selectedCard.prices.cardmarketMid && (
+                          <View style={styles.priceRow}>
+                            <ThemedText variant="muted" size="sm">Durchschnitt</ThemedText>
+                            <ThemedText weight="semibold">{formatPrice(selectedCard.prices.cardmarketMid)}</ThemedText>
+                          </View>
+                        )}
+                        {selectedCard.prices.cardmarketTrend && (
+                          <View style={styles.priceRow}>
+                            <ThemedText variant="muted" size="sm">Trend</ThemedText>
+                            <ThemedText variant="secondary">{formatPrice(selectedCard.prices.cardmarketTrend)}</ThemedText>
+                          </View>
+                        )}
+                        {!selectedCard.prices.cardmarketLow && !selectedCard.prices.cardmarketMid && (
+                          <ThemedText variant="muted" size="sm">Kein Preis verfügbar</ThemedText>
+                        )}
+                      </GlowCard>
+                    </TouchableOpacity>
+                  )}
+
+                  {/* TCGPlayer */}
+                  {selectedCard?.prices?.tcgplayerLow && (
+                    <GlowCard style={{ marginBottom: 12 }}>
+                      <ThemedText weight="semibold" style={{ marginBottom: 8 }}>TCGPlayer</ThemedText>
+                      <View style={styles.priceRow}>
+                        <ThemedText variant="muted" size="sm">Niedrigster Preis</ThemedText>
+                        <ThemedText weight="bold">{formatPrice(selectedCard.prices.tcgplayerLow)}</ThemedText>
+                      </View>
+                      {selectedCard.prices.tcgplayerMid && (
+                        <View style={styles.priceRow}>
+                          <ThemedText variant="muted" size="sm">Market</ThemedText>
+                          <ThemedText variant="secondary">{formatPrice(selectedCard.prices.tcgplayerMid)}</ThemedText>
+                        </View>
+                      )}
+                    </GlowCard>
+                  )}
+
+                  {/* Actions */}
+                  <View style={{ flexDirection: 'row', gap: 12, marginTop: 8 }}>
+                    <TouchableOpacity
+                      onPress={() => { if (selectedCard) { toggleFavorite(selectedCard.id); setSelectedCard(cards.find(c => c.id === selectedCard.id) ?? null); } }}
+                      style={{ flex: 1, padding: 14, borderRadius: 10, borderWidth: 1, borderColor: theme.colors.border, alignItems: 'center' }}
+                    >
+                      <Text style={{ fontSize: 18 }}>{selectedCard?.isFavorite ? '⭐ Favorit' : '☆ Favorit'}</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={() => {
+                        if (!selectedCard) return;
+                        Alert.alert('Löschen', `"${selectedCard.name}" löschen?`, [
+                          { text: 'Abbrechen', style: 'cancel' },
+                          { text: 'Löschen', style: 'destructive', onPress: () => { removeCard(selectedCard.id); setSelectedCard(null); } },
+                        ]);
+                      }}
+                      style={{ flex: 1, padding: 14, borderRadius: 10, borderWidth: 1, borderColor: theme.colors.error + '66', alignItems: 'center' }}
+                    >
+                      <Text style={{ color: theme.colors.error, fontSize: 15, fontWeight: '600' }}>🗑️ Löschen</Text>
+                    </TouchableOpacity>
+                  </View>
+                </ScrollView>
+              </View>
+            </View>
+          </Modal>
 
           <TouchableOpacity
             onPress={() => setPhase('ready')}

@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, ScrollView, StyleSheet, TouchableOpacity, Text,
   useWindowDimensions, Image, ActivityIndicator, Linking, Alert,
@@ -30,9 +30,43 @@ export default function ItemDetailScreen() {
 
   const [soldListings, setSoldListings] = useState<EbaySoldListing[]>([]);
   const [blListings, setBlListings] = useState<BricklinkListing[]>([]);
+  const [blDebug, setBlDebug] = useState<string>('nicht geladen');
   const [refreshing, setRefreshing] = useState(false);
   const [refreshMsg, setRefreshMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const refreshMsgTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoLoadDone = useRef(false);
+
+  // BrickLink-Listings beim Öffnen laden wenn Item LEGO ist
+  useEffect(() => {
+    if (!item.isLegoOrBricks) {
+      setBlDebug('kein LEGO-Item (isLegoOrBricks=false)');
+      return;
+    }
+    const query = item.legoSetNumber ?? item.name;
+    setBlDebug(`lade... query="${query}"`);
+    fetchBricklinkPrice(query)
+      .then(bl => {
+        if (!bl) { setBlDebug('fetchBricklinkPrice → null'); return; }
+        setBlDebug(`bl.itemId="${bl.itemId}" type="${bl.type}" → lade Listings...`);
+        return fetchBricklinkListings(bl.itemId, bl.type).then(listings => {
+          setBlListings(listings);
+          setBlDebug(`OK: ${listings.length} Listings geladen`);
+        });
+      })
+      .catch(e => setBlDebug(`Fehler: ${String(e)}`));
+  }, [item.id]);
+
+  // eBay-Preise automatisch beim Öffnen laden (einmalig)
+  useEffect(() => {
+    if (autoLoadDone.current) return;
+    autoLoadDone.current = true;
+    // Kurz verzögern damit der Screen erst rendert
+    const t = setTimeout(() => {
+      handleRefreshPrices();
+    }, 400);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (!item) {
     return (
@@ -91,9 +125,12 @@ export default function ItemDetailScreen() {
 
       // BrickLink-Einzellisten laden wenn Item bekannt
       if (bricklink?.itemId) {
+        setBlDebug(`refresh: bl.itemId="${bricklink.itemId}" type="${bricklink.type}"`);
         fetchBricklinkListings(bricklink.itemId, bricklink.type, undefined)
-          .then(setBlListings)
-          .catch(() => {});
+          .then(listings => { setBlListings(listings); setBlDebug(`refresh OK: ${listings.length} Listings`); })
+          .catch(e => setBlDebug(`refresh Fehler: ${String(e)}`));
+      } else {
+        setBlDebug(`refresh: bricklink=${JSON.stringify(bricklink)?.slice(0,80)}`);
       }
 
       const stats = calculatePriceStats(listings);
@@ -349,6 +386,14 @@ export default function ItemDetailScreen() {
             <ThemedText size="xs" style={{ color: refreshMsg.ok ? theme.colors.success : theme.colors.warning }}>
               {refreshMsg.text}
             </ThemedText>
+          </View>
+        )}
+
+        {/* DEBUG — temp */}
+        {item.isLegoOrBricks && (
+          <View style={{ marginHorizontal: 16, marginBottom: 8, padding: 8, backgroundColor: '#1a1a1a', borderRadius: 8, borderWidth: 1, borderColor: '#e3000b44' }}>
+            <Text style={{ color: '#e3000b', fontSize: 10, fontFamily: 'monospace' }}>BL-DEBUG: {blDebug}</Text>
+            <Text style={{ color: '#888', fontSize: 10 }}>isLego={String(item.isLegoOrBricks)} setNo={item.legoSetNumber ?? '?'} blListings={blListings.length}</Text>
           </View>
         )}
 
