@@ -1,7 +1,7 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import {
-  View, ScrollView, StyleSheet, TouchableOpacity, Text, Alert,
-  useWindowDimensions, Image, ActivityIndicator, Linking,
+  View, ScrollView, StyleSheet, TouchableOpacity, Text,
+  useWindowDimensions, Image, ActivityIndicator, Linking, Alert,
 } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -29,6 +29,8 @@ export default function ItemDetailScreen() {
 
   const [soldListings, setSoldListings] = useState<EbaySoldListing[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [refreshMsg, setRefreshMsg] = useState<{ text: string; ok: boolean } | null>(null);
+  const refreshMsgTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   if (!item) {
     return (
@@ -64,14 +66,22 @@ export default function ItemDetailScreen() {
     Alert.alert('Bald verfügbar', 'eBay Listing wird in Kürze implementiert.');
   };
 
+  const showRefreshMsg = useCallback((text: string, ok: boolean) => {
+    if (refreshMsgTimer.current) clearTimeout(refreshMsgTimer.current);
+    setRefreshMsg({ text, ok });
+    refreshMsgTimer.current = setTimeout(() => setRefreshMsg(null), 3000);
+  }, []);
+
   const handleRefreshPrices = useCallback(async () => {
     setRefreshing(true);
     try {
       const searchQuery = item.name;
+
+      // Jede Quelle einzeln — ein Fehler blockiert nicht die anderen
       const [rawListings, geizhals, bricklink] = await Promise.all([
-        fetchSoldListingsPublic(searchQuery, 10),
-        fetchGeizhalsPrice(searchQuery),
-        fetchBricklinkPrice(searchQuery),
+        fetchSoldListingsPublic(searchQuery, 10).catch(() => [] as import('@/src/types/item').EbaySoldListing[]),
+        fetchGeizhalsPrice(searchQuery).catch(() => null),
+        fetchBricklinkPrice(searchQuery).catch(() => null),
       ]);
 
       const listings = rawListings.filter(l => l.price > 0);
@@ -111,12 +121,15 @@ export default function ItemDetailScreen() {
       if (newPricePoint) {
         await insertPricePoint(db, id, newPricePoint);
       }
+
+      const hasAny = listings.length > 0 || bricklink != null;
+      showRefreshMsg(hasAny ? 'Preise aktualisiert ✓' : 'Keine neuen Preise gefunden', hasAny);
     } catch {
-      Alert.alert('Fehler', 'Preise konnten nicht aktualisiert werden.');
+      showRefreshMsg('Aktualisierung fehlgeschlagen', false);
     } finally {
       setRefreshing(false);
     }
-  }, [id, item]);
+  }, [id, item, showRefreshMsg]);
 
   const displayListings = soldListings.length > 0 ? soldListings : [];
 
@@ -312,6 +325,15 @@ export default function ItemDetailScreen() {
           )}
         </TouchableOpacity>
 
+        {/* Inline Feedback */}
+        {refreshMsg && (
+          <View style={[styles.refreshMsg, { backgroundColor: refreshMsg.ok ? theme.colors.success + '22' : theme.colors.warning + '22', borderColor: refreshMsg.ok ? theme.colors.success : theme.colors.warning }]}>
+            <ThemedText size="xs" style={{ color: refreshMsg.ok ? theme.colors.success : theme.colors.warning }}>
+              {refreshMsg.text}
+            </ThemedText>
+          </View>
+        )}
+
         {/* eBay sold listings */}
         {displayListings.length > 0 && (
           <GlowCard>
@@ -470,6 +492,10 @@ const styles = StyleSheet.create({
   refreshBtn: {
     height: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center',
     borderWidth: 1,
+  },
+  refreshMsg: {
+    marginTop: 8, borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12,
+    borderWidth: 1, alignItems: 'center',
   },
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   listingRow: {
