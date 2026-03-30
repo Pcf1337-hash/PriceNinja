@@ -3,7 +3,7 @@ import * as SQLite from 'expo-sqlite';
 import { getDatabase } from '@/src/db';
 import { useItemStore } from '@/src/store/useItemStore';
 import { useCardStore } from '@/src/store/useCardStore';
-import { getAllItems, getAllCards, getFavoriteCards } from '@/src/db/queries';
+import { getAllItems, getAllCards, getFavoriteCards, getPriceHistory } from '@/src/db/queries';
 
 /**
  * Hook to initialize the database and load initial data into stores.
@@ -30,7 +30,15 @@ export function useDatabase() {
           getFavoriteCards(db),
         ]);
 
-        setItems(items);
+        // Preisverlauf aus SQLite für jeden Artikel laden
+        const itemsWithHistory = await Promise.all(
+          items.map(async (item) => {
+            const history = await getPriceHistory(db, item.id);
+            return { ...item, priceHistory: history };
+          })
+        );
+
+        setItems(itemsWithHistory);
         setCards(cards);
         setFavorites(favorites);
       } catch (error) {

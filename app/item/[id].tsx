@@ -15,6 +15,7 @@ import { fetchSoldListingsPublic } from '@/src/api/ebay';
 import { fetchGeizhalsPrice } from '@/src/api/geizhals';
 import { fetchBricklinkPrice } from '@/src/api/bricklink';
 import { EbaySoldListing } from '@/src/types/item';
+import { getDatabase, updateItemPrices, insertPricePoint } from '@/src/db';
 
 export default function ItemDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -79,7 +80,7 @@ export default function ItemDetailScreen() {
       const stats = calculatePriceStats(listings);
       const now = new Date().toISOString();
 
-      updateItem(id, {
+      const updatedPrices = {
         ebaySoldAvg: stats.avg > 0 ? stats.avg : item.ebaySoldAvg,
         ebaySoldMin: stats.min > 0 ? stats.min : item.ebaySoldMin,
         ebaySoldMax: stats.max > 0 ? stats.max : item.ebaySoldMax,
@@ -89,12 +90,27 @@ export default function ItemDetailScreen() {
         bricklinkAvg: bricklink?.avgPrice ?? item.bricklinkAvg,
         bricklinkMin: bricklink?.minPrice ?? item.bricklinkMin,
         bricklinkUrl: bricklink?.url ?? item.bricklinkUrl,
+      };
+
+      const newPricePoint = stats.avg > 0
+        ? { timestamp: now, ebaySoldAvg: stats.avg, geizhalsCheapest: geizhals?.cheapestPrice }
+        : null;
+
+      updateItem(id, {
+        ...updatedPrices,
         lastPriceUpdate: now,
-        priceHistory: stats.avg > 0
-          ? [{ timestamp: now, ebaySoldAvg: stats.avg, geizhalsCheapest: geizhals?.cheapestPrice }, ...item.priceHistory].slice(0, 30)
+        priceHistory: newPricePoint
+          ? [newPricePoint, ...item.priceHistory].slice(0, 30)
           : item.priceHistory,
         updatedAt: now,
       });
+
+      // Preise dauerhaft in SQLite speichern
+      const db = await getDatabase();
+      await updateItemPrices(db, id, updatedPrices);
+      if (newPricePoint) {
+        await insertPricePoint(db, id, newPricePoint);
+      }
     } catch {
       Alert.alert('Fehler', 'Preise konnten nicht aktualisiert werden.');
     } finally {

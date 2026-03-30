@@ -15,6 +15,14 @@ export const migrations: Migration[] = [
       INSERT OR IGNORE INTO schema_version (version) VALUES (0);
     `,
   },
+  {
+    version: 2,
+    up: `
+      ALTER TABLE items ADD COLUMN bricklink_avg REAL;
+      ALTER TABLE items ADD COLUMN bricklink_min REAL;
+      ALTER TABLE items ADD COLUMN bricklink_url TEXT;
+    `,
+  },
 ];
 
 export async function runMigrations(db: SQLite.SQLiteDatabase): Promise<void> {

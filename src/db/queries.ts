@@ -19,6 +19,9 @@ function rowToItem(row: Record<string, unknown>): TrackedItem {
     ebaySoldCount: row.ebay_sold_count as number | undefined,
     geizhalsCheapest: row.geizhals_cheapest as number | undefined,
     geizhalsUrl: row.geizhals_url as string | undefined,
+    bricklinkAvg: row.bricklink_avg as number | undefined,
+    bricklinkMin: row.bricklink_min as number | undefined,
+    bricklinkUrl: row.bricklink_url as string | undefined,
     lastPriceUpdate: row.last_price_update as string | undefined,
     refreshInterval: (row.refresh_interval as number ?? 6) as TrackedItem['refreshInterval'],
     isFavorite: (row.is_favorite as number) === 1,
@@ -82,6 +85,9 @@ export async function updateItemPrices(
     ebaySoldCount?: number;
     geizhalsCheapest?: number;
     geizhalsUrl?: string;
+    bricklinkAvg?: number;
+    bricklinkMin?: number;
+    bricklinkUrl?: string;
   }
 ): Promise<void> {
   const now = new Date().toISOString();
@@ -89,12 +95,14 @@ export async function updateItemPrices(
     `UPDATE items SET
       ebay_sold_avg = ?, ebay_sold_min = ?, ebay_sold_max = ?,
       ebay_sold_count = ?, geizhals_cheapest = ?, geizhals_url = ?,
+      bricklink_avg = ?, bricklink_min = ?, bricklink_url = ?,
       last_price_update = ?, updated_at = ?
     WHERE id = ?`,
     [
       prices.ebaySoldAvg ?? null, prices.ebaySoldMin ?? null,
       prices.ebaySoldMax ?? null, prices.ebaySoldCount ?? 0,
       prices.geizhalsCheapest ?? null, prices.geizhalsUrl ?? null,
+      prices.bricklinkAvg ?? null, prices.bricklinkMin ?? null, prices.bricklinkUrl ?? null,
       now, now, id,
     ]
   );
