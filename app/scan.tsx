@@ -11,7 +11,9 @@ import {
   Image,
   Linking,
   Modal,
+  Dimensions,
 } from 'react-native';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
@@ -481,7 +483,21 @@ export default function ScanScreen() {
         shutterSound: false,
       });
       if (!photo?.uri) throw new Error('Kein Foto aufgenommen');
-      await processImage(photo.uri);
+      // Crop to scan frame: top 20%, left 10%, width 80%, height 50%
+      const { width: sw, height: sh } = Dimensions.get('window');
+      const scale = Math.max(photo.width / sw, photo.height / sh);
+      const ox = (photo.width - sw * scale) / 2;
+      const oy = (photo.height - sh * scale) / 2;
+      const cropX = Math.max(0, Math.round(ox + 0.10 * sw * scale));
+      const cropY = Math.max(0, Math.round(oy + 0.20 * sh * scale));
+      const cropW = Math.min(photo.width - cropX, Math.round(0.80 * sw * scale));
+      const cropH = Math.min(photo.height - cropY, Math.round(0.50 * sh * scale));
+      const cropped = await manipulateAsync(
+        photo.uri,
+        [{ crop: { originX: cropX, originY: cropY, width: cropW, height: cropH } }],
+        { compress: 0.85, format: SaveFormat.JPEG },
+      );
+      await processImage(cropped.uri);
     } catch (error) {
       setScanState('idle');
       Alert.alert('Scan fehlgeschlagen', String(error));

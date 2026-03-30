@@ -12,7 +12,9 @@ import {
   Linking,
   ScrollView,
   Modal,
+  Dimensions,
 } from 'react-native';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, router } from 'expo-router';
@@ -102,13 +104,32 @@ export default function CardsScreen() {
 
       setPhase('processing');
 
-      const result = await identifyCard(claudeApiKey, photo.uri);
+      // Crop to card frame: 8% horizontal padding, card aspect ratio 0.716, vertically centered
+      const { width: sw, height: sh } = Dimensions.get('window');
+      const scale = Math.max(photo.width / sw, photo.height / sh);
+      const ox = (photo.width - sw * scale) / 2;
+      const oy = (photo.height - sh * scale) / 2;
+      const frameW = sw * 0.84;
+      const frameH = frameW / 0.716;
+      const availH = sh - (insets.top + 60) - (insets.bottom + 80);
+      const frameTop = insets.top + 60 + Math.max(0, (availH - frameH) / 2);
+      const cropX = Math.max(0, Math.round(ox + 0.08 * sw * scale));
+      const cropY = Math.max(0, Math.round(oy + frameTop * scale));
+      const cropW = Math.min(photo.width - cropX, Math.round(frameW * scale));
+      const cropH = Math.min(photo.height - cropY, Math.round(frameH * scale));
+      const cropped = await manipulateAsync(
+        photo.uri,
+        [{ crop: { originX: cropX, originY: cropY, width: cropW, height: cropH } }],
+        { compress: 0.85, format: SaveFormat.JPEG },
+      );
+
+      const result = await identifyCard(claudeApiKey, cropped.uri);
       // Auto-fetch prices immediately after recognition
       const prices = await fetchCardPrice(
         { game: result.game, name: result.name, setCode: result.setCode, cardNumber: result.cardNumber },
         pokemonTcgApiKey || undefined,
       );
-      setPendingCard({ imageUri: photo.uri, result: { ...result, source: 'claude' }, prices: prices ?? undefined });
+      setPendingCard({ imageUri: cropped.uri, result: { ...result, source: 'claude' }, prices: prices ?? undefined });
       incrementCardScanCount();
       setPhase('confirming');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
