@@ -488,14 +488,19 @@ export default function ScanScreen() {
     if (!textQuery.trim()) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
+    const q = textQuery.trim();
+    const isLego = /\blego\b|set\s*\d{4,}|\b\d{5}-\d\b/i.test(q);
+    const setNumberMatch = q.match(/\b(\d{4,5})(?:-\d)?\b/);
     const fakeClaudeResult: ClaudeItemResult = {
-      name: textQuery.trim(),
-      brand: undefined,
+      name: q,
+      brand: isLego ? 'LEGO' : undefined,
       model: undefined,
-      category: 'Sonstiges',
+      category: isLego ? 'LEGO' : 'Sonstiges',
       confidence: 1,
-      searchQuery: textQuery.trim(),
-      description: textQuery.trim(),
+      searchQuery: q,
+      description: q,
+      isLegoOrBricks: isLego,
+      lego: isLego && setNumberMatch ? { setNumber: setNumberMatch[1], theme: undefined } : undefined,
     };
 
     setScanResult({

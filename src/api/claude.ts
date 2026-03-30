@@ -237,3 +237,64 @@ Condition codes: M=Mint, NM=Near Mint, LP=Lightly Played, MP=Moderately Played, 
 
   return result;
 }
+
+// ─── eBay Listing Generator ──────────────────────────────────────────────────
+
+export interface EbayListingDraft {
+  title: string;
+  shortDescription: string;
+  mediumDescription: string;
+  longDescription: string;
+  suggestedKeywords: string[];
+  categoryHint: string;
+}
+
+export async function generateEbayListing(
+  apiKey: string,
+  itemName: string,
+  brand: string | undefined,
+  model: string | undefined,
+  category: string,
+  ebaySoldAvg: number | undefined,
+  condition: string,
+): Promise<EbayListingDraft> {
+  const prompt = `Du bist ein eBay-Listing-Experte. Erstelle ein professionelles deutsches eBay-Angebot für:
+
+Artikel: ${itemName}
+${brand ? `Marke: ${brand}` : ''}
+${model ? `Modell: ${model}` : ''}
+Kategorie: ${category}
+Zustand: ${condition}
+${ebaySoldAvg ? `Durchschnittlicher eBay-Verkaufspreis: ${ebaySoldAvg.toFixed(2)} €` : ''}
+
+Antworte NUR mit diesem JSON (kein Markdown, kein Text darum):
+{
+  "title": "eBay Titel max 80 Zeichen, präzise mit Marke/Modell/Zustand",
+  "shortDescription": "2-3 Sätze, das Wichtigste",
+  "mediumDescription": "5-7 Sätze, Zustand + Lieferumfang + Hinweise",
+  "longDescription": "Ausführliche Beschreibung mit allen Details, Privatverkauf-Hinweis, Versandinfos",
+  "suggestedKeywords": ["keyword1", "keyword2", "keyword3"],
+  "categoryHint": "passende eBay-Kategorie"
+}`;
+
+  const response = await fetch(CLAUDE_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1024,
+      messages: [{ role: 'user', content: prompt }],
+    }),
+  });
+
+  if (!response.ok) throw new Error(`Claude API error: ${response.status}`);
+  const data = await response.json();
+  const text: string = data.content?.[0]?.text ?? '';
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error('No JSON in response');
+  return JSON.parse(jsonMatch[0]) as EbayListingDraft;
+}

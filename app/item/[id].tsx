@@ -16,7 +16,6 @@ import { fetchGeizhalsPrice } from '@/src/api/geizhals';
 import { fetchBricklinkPrice, fetchBricklinkListings, BricklinkListing } from '@/src/api/bricklink';
 import { EbaySoldListing } from '@/src/types/item';
 import { getDatabase, updateItemPrices, insertPricePoint } from '@/src/db';
-import { EbaySalePoint } from '@/src/components/PriceChart';
 
 export default function ItemDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -30,7 +29,6 @@ export default function ItemDetailScreen() {
 
   const [soldListings, setSoldListings] = useState<EbaySoldListing[]>([]);
   const [blListings, setBlListings] = useState<BricklinkListing[]>([]);
-  const [blDebug, setBlDebug] = useState<string>('nicht geladen');
   const [refreshing, setRefreshing] = useState(false);
   const [refreshMsg, setRefreshMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const refreshMsgTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -39,21 +37,15 @@ export default function ItemDetailScreen() {
   // BrickLink-Listings beim Öffnen laden wenn Item LEGO ist
   useEffect(() => {
     if (!item.isLegoOrBricks) {
-      setBlDebug('kein LEGO-Item (isLegoOrBricks=false)');
       return;
     }
     const query = item.legoSetNumber ?? item.name;
-    setBlDebug(`lade... query="${query}"`);
     fetchBricklinkPrice(query)
       .then(bl => {
-        if (!bl) { setBlDebug('fetchBricklinkPrice → null'); return; }
-        setBlDebug(`bl.itemId="${bl.itemId}" type="${bl.type}" → lade Listings...`);
-        return fetchBricklinkListings(bl.itemId, bl.type).then(listings => {
-          setBlListings(listings);
-          setBlDebug(`OK: ${listings.length} Listings geladen`);
-        });
+        if (!bl) return;
+        return fetchBricklinkListings(bl.itemId, bl.type).then(setBlListings);
       })
-      .catch(e => setBlDebug(`Fehler: ${String(e)}`));
+      .catch(() => {});
   }, [item.id]);
 
   // eBay-Preise automatisch beim Öffnen laden (einmalig)
@@ -99,7 +91,18 @@ export default function ItemDetailScreen() {
       }
       return;
     }
-    Alert.alert('Bald verfügbar', 'eBay Listing wird in Kürze implementiert.');
+    router.push({
+      pathname: '/sell-wizard/ai-prep',
+      params: {
+        itemId: id,
+        itemName: item.name,
+        itemBrand: item.brand ?? '',
+        itemModel: item.model ?? '',
+        itemCategory: item.category ?? '',
+        imageUri: item.imageUri ?? '',
+        suggestedPrice: item.ebaySoldAvg ? String(item.ebaySoldAvg) : '',
+      },
+    });
   };
 
   const showRefreshMsg = useCallback((text: string, ok: boolean) => {
@@ -125,12 +128,9 @@ export default function ItemDetailScreen() {
 
       // BrickLink-Einzellisten laden wenn Item bekannt
       if (bricklink?.itemId) {
-        setBlDebug(`refresh: bl.itemId="${bricklink.itemId}" type="${bricklink.type}"`);
         fetchBricklinkListings(bricklink.itemId, bricklink.type, undefined)
-          .then(listings => { setBlListings(listings); setBlDebug(`refresh OK: ${listings.length} Listings`); })
-          .catch(e => setBlDebug(`refresh Fehler: ${String(e)}`));
-      } else {
-        setBlDebug(`refresh: bricklink=${JSON.stringify(bricklink)?.slice(0,80)}`);
+          .then(setBlListings)
+          .catch(() => {});
       }
 
       const stats = calculatePriceStats(listings);
@@ -167,26 +167,23 @@ export default function ItemDetailScreen() {
         updatedAt: now,
       });
 
-      // Preise dauerhaft in SQLite speichern
-      const db = await getDatabase();
-      await updateItemPrices(db, id, updatedPrices);
-      if (newPricePoint) {
-        await insertPricePoint(db, id, newPricePoint);
-      }
+      // Preise dauerhaft in SQLite speichern (Fehler hier darf Erfolgsmeldung nicht blockieren)
+      try {
+        const db = await getDatabase();
+        await updateItemPrices(db, id, updatedPrices);
+        if (newPricePoint) {
+          await insertPricePoint(db, id, newPricePoint);
+        }
+      } catch { /* DB-Fehler ignorieren */ }
 
       const hasAny = listings.length > 0 || bricklink != null;
       showRefreshMsg(hasAny ? 'Preise aktualisiert ✓' : 'Keine neuen Preise gefunden', hasAny);
-    } catch {
-      showRefreshMsg('Aktualisierung fehlgeschlagen', false);
-    } finally {
+    } catch { /* noop */ } finally {
       setRefreshing(false);
     }
   }, [id, item, showRefreshMsg]);
 
   const displayListings = soldListings;
-  const ebayChartPoints: EbaySalePoint[] = soldListings
-    .filter(l => l.price > 0 && l.soldDate)
-    .map(l => ({ price: l.price, soldDate: l.soldDate }));
 
   return (
     <ThemedView style={[styles.container, { paddingTop: insets.top }]}>
@@ -389,14 +386,6 @@ export default function ItemDetailScreen() {
           </View>
         )}
 
-        {/* DEBUG — temp */}
-        {item.isLegoOrBricks && (
-          <View style={{ marginHorizontal: 16, marginBottom: 8, padding: 8, backgroundColor: '#1a1a1a', borderRadius: 8, borderWidth: 1, borderColor: '#e3000b44' }}>
-            <Text style={{ color: '#e3000b', fontSize: 10, fontFamily: 'monospace' }}>BL-DEBUG: {blDebug}</Text>
-            <Text style={{ color: '#888', fontSize: 10 }}>isLego={String(item.isLegoOrBricks)} setNo={item.legoSetNumber ?? '?'} blListings={blListings.length}</Text>
-          </View>
-        )}
-
         {/* BrickLink Angebote */}
         {blListings.length > 0 && (
           <GlowCard>
@@ -515,33 +504,17 @@ export default function ItemDetailScreen() {
           </GlowCard>
         )}
 
-        {/* Price history chart */}
-        {item.priceHistory.length > 1 && (
-          <>
-            {item.ebaySoldAvg && (
-              <GlowCard>
-                <PriceChart
-                  data={item.priceHistory}
-                  soldListings={ebayChartPoints.length >= 2 ? ebayChartPoints : undefined}
-                  label="eBay Preisverlauf"
-                  valueKey="ebaySoldAvg"
-                  width={chartWidth}
-                  height={160}
-                />
-              </GlowCard>
-            )}
-            {item.geizhalsCheapest && (
-              <GlowCard>
-                <PriceChart
-                  data={item.priceHistory}
-                  label="Geizhals Preisverlauf"
-                  valueKey="geizhalsCheapest"
-                  width={chartWidth}
-                  height={160}
-                />
-              </GlowCard>
-            )}
-          </>
+        {/* Preisverlauf — nur wenn gespeicherte Preishistory vorhanden */}
+        {item.priceHistory.length > 1 && item.geizhalsCheapest && (
+          <GlowCard>
+            <PriceChart
+              data={item.priceHistory}
+              label="Preisverlauf"
+              valueKey="geizhalsCheapest"
+              width={chartWidth}
+              height={160}
+            />
+          </GlowCard>
         )}
       </ScrollView>
 
