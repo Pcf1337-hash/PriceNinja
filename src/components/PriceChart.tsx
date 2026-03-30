@@ -10,8 +10,14 @@ function fmtAxisPrice(v: number): string {
   return v >= 1000 ? `${(v / 1000).toFixed(1)}k€` : `${Math.round(v)}€`;
 }
 
+export interface EbaySalePoint {
+  price: number;
+  soldDate?: string;
+}
+
 interface PriceChartProps {
   data: PricePoint[];
+  soldListings?: EbaySalePoint[];
   label?: string;
   valueKey?: 'ebaySoldAvg' | 'geizhalsCheapest';
   width?: number;
@@ -22,6 +28,7 @@ const PADDING = { top: 16, right: 16, bottom: 32, left: 56 };
 
 export function PriceChart({
   data,
+  soldListings,
   label = 'Preisverlauf',
   valueKey = 'ebaySoldAvg',
   width = 320,
@@ -29,9 +36,18 @@ export function PriceChart({
 }: PriceChartProps) {
   const { theme } = useTheme();
 
-  const points = data
-    .map((p) => ({ value: p[valueKey] ?? 0, ts: new Date(p.timestamp).getTime() }))
-    .filter((p) => p.value > 0);
+  // Bevorzuge eBay-Einzelverkäufe mit echten Verkaufsdaten als Zeitachse
+  const points = React.useMemo(() => {
+    if (soldListings && soldListings.length >= 2) {
+      return soldListings
+        .filter(l => l.price > 0 && l.soldDate)
+        .map(l => ({ value: l.price, ts: new Date(l.soldDate!).getTime() }))
+        .sort((a, b) => a.ts - b.ts);
+    }
+    return data
+      .map((p) => ({ value: p[valueKey] ?? 0, ts: new Date(p.timestamp).getTime() }))
+      .filter((p) => p.value > 0);
+  }, [soldListings, data, valueKey]);
 
   if (points.length < 2) {
     return (

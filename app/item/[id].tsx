@@ -13,9 +13,10 @@ import { useEbayPermissions } from '@/src/store/useEbayPermissions';
 import { PriceChart } from '@/src/components/PriceChart';
 import { fetchSoldListingsPublic } from '@/src/api/ebay';
 import { fetchGeizhalsPrice } from '@/src/api/geizhals';
-import { fetchBricklinkPrice } from '@/src/api/bricklink';
+import { fetchBricklinkPrice, fetchBricklinkListings, BricklinkListing } from '@/src/api/bricklink';
 import { EbaySoldListing } from '@/src/types/item';
 import { getDatabase, updateItemPrices, insertPricePoint } from '@/src/db';
+import { EbaySalePoint } from '@/src/components/PriceChart';
 
 export default function ItemDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -28,6 +29,7 @@ export default function ItemDetailScreen() {
   const item = getItemById(id);
 
   const [soldListings, setSoldListings] = useState<EbaySoldListing[]>([]);
+  const [blListings, setBlListings] = useState<BricklinkListing[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshMsg, setRefreshMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const refreshMsgTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -87,6 +89,13 @@ export default function ItemDetailScreen() {
       const listings = rawListings.filter(l => l.price > 0);
       setSoldListings(listings);
 
+      // BrickLink-Einzellisten laden wenn Item bekannt
+      if (bricklink?.itemId) {
+        fetchBricklinkListings(bricklink.itemId, bricklink.type, undefined)
+          .then(setBlListings)
+          .catch(() => {});
+      }
+
       const stats = calculatePriceStats(listings);
       const now = new Date().toISOString();
 
@@ -95,8 +104,14 @@ export default function ItemDetailScreen() {
         ebaySoldMin: stats.min > 0 ? stats.min : item.ebaySoldMin,
         ebaySoldMax: stats.max > 0 ? stats.max : item.ebaySoldMax,
         ebaySoldCount: listings.length > 0 ? listings.length : item.ebaySoldCount,
-        geizhalsCheapest: geizhals?.cheapestPrice ?? item.geizhalsCheapest,
-        geizhalsUrl: geizhals?.url ?? item.geizhalsUrl,
+        // Geizhals-Preis nur übernehmen wenn er plausibel ist (mind. 25% des eBay-Preises)
+        // — verhindert dass Zubehör (z.B. Armband statt Uhr) übernommen wird
+        geizhalsCheapest: (geizhals && stats.avg > 0 && geizhals.cheapestPrice < stats.avg * 0.25)
+          ? item.geizhalsCheapest
+          : (geizhals?.cheapestPrice ?? item.geizhalsCheapest),
+        geizhalsUrl: (geizhals && stats.avg > 0 && geizhals.cheapestPrice < stats.avg * 0.25)
+          ? item.geizhalsUrl
+          : (geizhals?.url ?? item.geizhalsUrl),
         bricklinkAvg: bricklink?.avgPrice ?? item.bricklinkAvg,
         bricklinkMin: bricklink?.minPrice ?? item.bricklinkMin,
         bricklinkUrl: bricklink?.url ?? item.bricklinkUrl,
@@ -131,7 +146,10 @@ export default function ItemDetailScreen() {
     }
   }, [id, item, showRefreshMsg]);
 
-  const displayListings = soldListings.length > 0 ? soldListings : [];
+  const displayListings = soldListings;
+  const ebayChartPoints: EbaySalePoint[] = soldListings
+    .filter(l => l.price > 0 && l.soldDate)
+    .map(l => ({ price: l.price, soldDate: l.soldDate }));
 
   return (
     <ThemedView style={[styles.container, { paddingTop: insets.top }]}>
@@ -334,16 +352,58 @@ export default function ItemDetailScreen() {
           </View>
         )}
 
+        {/* BrickLink Angebote */}
+        {blListings.length > 0 && (
+          <GlowCard>
+            <View style={[styles.sectionHeader, { marginBottom: 8 }]}>
+              <ThemedText variant="muted" size="xs" weight="semibold" style={{ letterSpacing: 1, color: '#e3000b' }}>
+                BRICKLINK ANGEBOTE
+              </ThemedText>
+              <ThemedText variant="muted" size="xs">{blListings.length} Angebote</ThemedText>
+            </View>
+            <ScrollView
+              style={{ maxHeight: 5 * 44 }}
+              nestedScrollEnabled
+              showsVerticalScrollIndicator={false}
+            >
+              {blListings.map((listing, i) => (
+                <View
+                  key={i}
+                  style={[styles.listingRow, { borderTopColor: theme.colors.border }, i === 0 && { borderTopWidth: 0 }]}
+                >
+                  <View style={{ flex: 1 }}>
+                    <ThemedText size="sm" numberOfLines={1}>{listing.sellerName}</ThemedText>
+                    <ThemedText variant="muted" size="xs">{listing.condition} · {listing.location} · Qty: {listing.qty}</ThemedText>
+                  </View>
+                  <ThemedText weight="bold" size="sm" style={{ color: '#e3000b' }}>
+                    {listing.price.toFixed(2)} €
+                  </ThemedText>
+                </View>
+              ))}
+            </ScrollView>
+            {item.bricklinkUrl && (
+              <TouchableOpacity onPress={() => Linking.openURL(item.bricklinkUrl!)} style={{ marginTop: 8 }}>
+                <ThemedText size="xs" style={{ color: '#e3000b', textAlign: 'center' }}>Alle Angebote auf BrickLink →</ThemedText>
+              </TouchableOpacity>
+            )}
+          </GlowCard>
+        )}
+
         {/* eBay sold listings */}
         {displayListings.length > 0 && (
           <GlowCard>
             <View style={[styles.sectionHeader, { marginBottom: 8 }]}>
               <ThemedText variant="muted" size="xs" weight="semibold" style={{ letterSpacing: 1 }}>
-                LETZTE VERKÄUFE
+                LETZTE EBAY-VERKÄUFE
               </ThemedText>
               <ThemedText variant="muted" size="xs">{displayListings.length} gefunden</ThemedText>
             </View>
-            {displayListings.slice(0, 8).map((listing, i) => (
+            <ScrollView
+              style={{ maxHeight: 5 * 44 }}
+              nestedScrollEnabled
+              showsVerticalScrollIndicator={false}
+            >
+            {displayListings.map((listing, i) => (
               <TouchableOpacity
                 key={i}
                 onPress={() => listing.url && Linking.openURL(listing.url)}
@@ -370,6 +430,7 @@ export default function ItemDetailScreen() {
                 </View>
               </TouchableOpacity>
             ))}
+            </ScrollView>
           </GlowCard>
         )}
 
@@ -411,6 +472,7 @@ export default function ItemDetailScreen() {
               <GlowCard>
                 <PriceChart
                   data={item.priceHistory}
+                  soldListings={ebayChartPoints.length >= 2 ? ebayChartPoints : undefined}
                   label="eBay Preisverlauf"
                   valueKey="ebaySoldAvg"
                   width={chartWidth}

@@ -6,10 +6,19 @@ export interface BricklinkResult {
   name: string;
   minPrice: number;
   avgPrice: number;
-  newAvgPrice?: number;  // Neupreis-Durchschnitt (falls verfügbar)
+  newAvgPrice?: number;
   itemId: string;
-  type: string; // 'S' = set, 'P' = part, 'M' = minifig
+  type: string;
   url: string;
+}
+
+export interface BricklinkListing {
+  sellerName: string;
+  price: number;
+  currency: string;
+  condition: string;
+  qty: number;
+  location: string;
 }
 
 const BROWSER_HEADERS = {
@@ -205,4 +214,57 @@ export async function fetchBricklinkPrice(query: string): Promise<BricklinkResul
   }
 
   return null;
+}
+
+// Holt die ersten 10 Einzelangebote von BrickLink für ein Item
+export async function fetchBricklinkListings(
+  itemNo: string,
+  itemType: string = 'S',
+  itemId?: string,
+): Promise<BricklinkListing[]> {
+  const cacheKey = `bllist3_${itemType}_${itemNo}`;
+  const cached = await getCache<BricklinkListing[]>(cacheKey);
+  if (cached) return cached;
+
+  try {
+    // BrickLink store search AJAX — liefert individuelle Verkaufsangebote
+    const idParam = itemId ? `&itemId=${itemId}` : '';
+    const url = `https://www.bricklink.com/ajax/clone/store/searchInventory.ajax?itemType=${itemType}&itemNo=${encodeURIComponent(itemNo)}&colorId=0&cond=&rpp=10&pi=1${idParam}`;
+    const res = await fetch(url, { headers: BROWSER_HEADERS });
+    if (!res.ok) return [];
+    const text = await res.text();
+    if (!text.trim().startsWith('{') && !text.trim().startsWith('[')) return [];
+
+    const data = JSON.parse(text) as {
+      result?: {
+        list?: Array<{
+          strStorename?: string;
+          strSellerUsername?: string;
+          mDisplaySalesPrice?: string;
+          mSalesPrice?: string;
+          strCond?: string;
+          n4Qty?: number;
+          strCountry?: string;
+          strCountryCode?: string;
+        }>;
+      };
+    };
+
+    const items = data.result?.list ?? [];
+    const listings: BricklinkListing[] = items.slice(0, 10).map(it => ({
+      sellerName: it.strStorename ?? it.strSellerUsername ?? '?',
+      price: parseBlPrice(it.mDisplaySalesPrice ?? it.mSalesPrice),
+      currency: 'EUR',
+      condition: it.strCond === 'U' ? 'Gebraucht' : it.strCond === 'N' ? 'Neu' : (it.strCond ?? '?'),
+      qty: it.n4Qty ?? 1,
+      location: it.strCountry ?? it.strCountryCode ?? '',
+    })).filter(l => l.price > 0);
+
+    if (listings.length > 0) {
+      await setCache(cacheKey, listings, CACHE_TTL);
+    }
+    return listings;
+  } catch {
+    return [];
+  }
 }
