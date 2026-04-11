@@ -34,5 +34,5 @@ export const DB_VERSION = 1;
 export const POKEMON_TCG_API_BASE = 'https://api.pokemontcg.io/v2';
 
 // Rebrickable API — free, LEGO catalog data (set info, themes, piece counts)
-export const REBRICKABLE_API_KEY = '679dfd778799960615b1142a8d13768b';
+// Key comes from .env → app.config.ts extra → Constants.expoConfig.extra
 export const REBRICKABLE_BASE_URL = 'https://rebrickable.com/api/v3';

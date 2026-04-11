@@ -6,8 +6,11 @@
  * Docs: https://rebrickable.com/api/v3/
  */
 
+import Constants from 'expo-constants';
 import { getCache, setCache } from '@/src/utils/cache';
-import { REBRICKABLE_API_KEY } from '@/src/utils/constants';
+
+const _ENV = Constants.expoConfig?.extra ?? {};
+const REBRICKABLE_API_KEY: string = (_ENV.rebrickableApiKey as string) || '';
 
 const BASE = 'https://rebrickable.com/api/v3/lego';
 const CACHE_TTL = 24 * 60 * 60 * 1000; // 24h — catalog data changes rarely

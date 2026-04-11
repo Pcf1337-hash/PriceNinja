@@ -70,6 +70,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     ebayRuName: process.env.EBAY_RU_NAME ?? '',
     githubToken: process.env.GITHUB_TOKEN ?? '',
     pokemonTcgApiKey: process.env.POKEMON_TCG_API_KEY ?? '',
+    rebrickableApiKey: process.env.REBRICKABLE_API_KEY ?? '',
   },
   scheme: 'priceninja',
 });
