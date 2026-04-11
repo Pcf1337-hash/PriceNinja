@@ -1,4 +1,4 @@
-export const APP_VERSION = '2.1.1';
+export const APP_VERSION = '2.2.0';
 export const APP_NAME = 'PriceNinja';
 export const GITHUB_REPO = 'Pcf1337-hash/PriceNinja';
 
@@ -32,3 +32,7 @@ export const DB_NAME = 'price_ninja.db';
 export const DB_VERSION = 1;
 
 export const POKEMON_TCG_API_BASE = 'https://api.pokemontcg.io/v2';
+
+// Rebrickable API — free, LEGO catalog data (set info, themes, piece counts)
+export const REBRICKABLE_API_KEY = '679dfd778799960615b1142a8d13768b';
+export const REBRICKABLE_BASE_URL = 'https://rebrickable.com/api/v3';

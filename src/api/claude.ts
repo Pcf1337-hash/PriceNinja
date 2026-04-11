@@ -41,7 +41,7 @@ export interface ClaudeItemResult {
 }
 
 export interface ClaudeCardResult {
-  game: 'pokemon' | 'yugioh' | 'magic' | 'other';
+  game: 'pokemon' | 'yugioh' | 'magic' | 'wwe' | 'baseball' | 'basketball' | 'football' | 'soccer' | 'hockey' | 'ufc' | 'other';
   name: string;
   setName?: string;
   setCode?: string;
@@ -187,27 +187,47 @@ export async function identifyCard(
 
   const prompt = `You are a trading card expert. Analyze this trading card image carefully.
 
-IMPORTANT RULES:
-1. Read the card number printed at the BOTTOM of the card (e.g. "006/165", "025/102", "SWSH045"). This is the most reliable identifier.
-2. Read the set name/logo printed at the bottom or near the card number.
-3. If the card is in a non-English language (German: "Glurak"=Charizard, French, Spanish, etc.), return the ENGLISH name in the "name" field for database lookups. Put the localized name in "localName".
-4. For Pokémon: The card number like "006/165" means card #6 of 165 cards in that set.
-5. Look very carefully at the actual card name at the TOP — do not confuse artwork with card identity.
+═══ STEP 1: DETERMINE THE CARD TYPE ═══
+Look at the card carefully and pick EXACTLY ONE value for "game":
 
-Common German→English Pokémon names: Glurak=Charizard, Bisaflor=Venusaur, Turtok=Blastoise, Pikachu=Pikachu, Arktos=Articuno, Zapdos=Zapdos, Lavados=Moltres, Mewtwo=Mewtwo, Mew=Mew, Sonambaule=Hypno, Dragoran=Dragonite, Raupy=Caterpie, Gengar=Gengar, Relaxo=Snorlax, Glumanda=Charmander, Glutexo=Charmeleon, Schiggy=Squirtle, Bisasam=Bulbasaur.
+TCG (has HP / attack costs / game mechanics printed on the card):
+  "pokemon"    → Pokémon TCG (Nintendo/Game Freak)
+  "yugioh"     → Yu-Gi-Oh! (Konami) — has ATK/DEF numbers, "Effect Monster" etc.
+  "magic"      → Magic: The Gathering (Wizards of the Coast) — has mana symbols
 
-Respond ONLY with this JSON (no markdown, no extra text):
+Sports Cards (shows a real athlete photo, produced by Topps/Panini/Upper Deck/Donruss/Bowman):
+  "wwe"        → WWE wrestling or AEW cards
+  "baseball"   → MLB baseball (Topps, Bowman, Donruss, Fleer, Upper Deck)
+  "basketball" → NBA basketball (Topps, Panini Prizm, Select, Hoops, Donruss)
+  "football"   → NFL/college football cards
+  "soccer"     → Soccer/Fußball — including Panini stickers (FIFA WC, Champions League, Bundesliga, Adrenalyn XL)
+  "hockey"     → NHL hockey cards
+  "ufc"        → UFC, boxing, MMA trading cards
+
+  "other"      → any other trading card type not listed above
+
+═══ STEP 2: RULES ═══
+1. Card number is usually at the BOTTOM (e.g. "006/165", "#45", "RC-1", "AXL-123").
+2. For Sports Cards: read athlete name, year (usually top-left or copyright line), set/product line, card number, and any parallel/variant like "Prizm Silver /199", "Gold /50", "Autograph", "Rookie".
+3. If non-English card (German "Glurak"=Charizard, "Relaxo"=Snorlax, "Bisaflor"=Venusaur, "Glumanda"=Charmander, "Schiggy"=Squirtle, "Turtok"=Blastoise, "Gengar"=Gengar): put ENGLISH name in "name", original in "localName".
+4. searchQuery for Sports Cards → eBay-optimized: "YEAR BRAND SET ATHLETE VARIANT" e.g. "2024 Panini Select WWE Roman Reigns Silver Prizm /199"
+5. searchQuery for TCG → Cardmarket-optimized: "NAME SETNAME" e.g. "Charizard Obsidian Flames"
+
+═══ STEP 3: RESPOND WITH JSON ═══
+Return ONLY valid JSON — no markdown fences, no explanation text around it.
+Replace every <placeholder> with the real value you identified. Do NOT copy placeholder text.
+
 {
-  "game": "pokemon",
-  "name": "ENGLISH card name (for API lookup)",
-  "localName": "name as printed on card if non-English, else null",
-  "setName": "full set name as printed on card, or null",
-  "setCode": "set code/ID (e.g. 'sv3', 'base1', 'swsh12'), or null",
-  "cardNumber": "card number EXACTLY as printed (e.g. '006/165'), or null",
-  "rarity": "Common|Uncommon|Rare|Rare Holo|Ultra Rare|Secret Rare|etc, or null",
-  "condition": "M|NM|LP|MP|HP",
-  "confidence": 0.95,
-  "searchQuery": "English name + set for Cardmarket search"
+  "game": "<one of: pokemon | yugioh | magic | wwe | baseball | basketball | football | soccer | hockey | ufc | other>",
+  "name": "<English name of the card/athlete>",
+  "localName": "<name as printed on card if non-English, otherwise null>",
+  "setName": "<full set or product name as printed, or null>",
+  "setCode": "<TCG set code like sv3 or base1; for sports cards put the year like 2024; or null>",
+  "cardNumber": "<card number exactly as printed, or null>",
+  "rarity": "<TCG: Common|Uncommon|Rare|Holo Rare|Ultra Rare|Secret Rare — Sports: Base|Rookie|Prizm|Silver|Gold /50|Autograph|Patch|1/1 etc. — or null>",
+  "condition": "<M | NM | LP | MP | HP>",
+  "confidence": <0.0–1.0>,
+  "searchQuery": "<optimized search string as described in rule 4 or 5>"
 }
 
 Condition codes: M=Mint, NM=Near Mint, LP=Lightly Played, MP=Moderately Played, HP=Heavily Played.`;

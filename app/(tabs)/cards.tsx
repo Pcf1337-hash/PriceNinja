@@ -24,7 +24,7 @@ import { useCardStore, useSettingsStore } from '@/src/store';
 import { ThemedView, ThemedText, GlowCard, PrimaryButton } from '@/src/components/ui';
 import { identifyCard, ClaudeCardResult } from '@/src/api/claude';
 import { fetchCardPrice } from '@/src/api/tcg';
-import { TradingCard } from '@/src/types/card';
+import { TradingCard, getCardCategory, getCardEmoji, getCardLabel, CardCategory } from '@/src/types/card';
 import { formatPrice } from '@/src/utils/pricing';
 import { CARD_SCAN_RATE_LIMIT } from '@/src/utils/constants';
 import 'react-native-get-random-values';
@@ -32,14 +32,15 @@ import { v4 as uuidv4 } from 'uuid';
 
 type CardResult = ClaudeCardResult & { source?: string };
 
-// What the scanner is currently doing
 type ScanPhase =
-  | 'ready'       // Waiting — show "Tippe zum Scannen"
-  | 'capturing'   // Taking photo
-  | 'processing'  // Claude is analyzing
-  | 'confirming'  // Claude result — confirm
-  | 'fetching'    // Fetching prices
-  | 'history';    // History view
+  | 'ready'
+  | 'capturing'
+  | 'processing'
+  | 'confirming'
+  | 'fetching'
+  | 'history';
+
+type HistoryFilter = 'all' | 'tcg' | 'sports';
 
 export default function CardsScreen() {
   const { theme } = useTheme();
@@ -47,10 +48,11 @@ export default function CardsScreen() {
   const [permission, requestPermission] = useCameraPermissions();
   const [phase, setPhase] = useState<ScanPhase>('ready');
   const [pendingCard, setPendingCard] = useState<{ imageUri: string; result: CardResult; prices?: Awaited<ReturnType<typeof fetchCardPrice>> } | null>(null);
+  const [historyFilter, setHistoryFilter] = useState<HistoryFilter>('all');
 
   const cameraRef = useRef<CameraView>(null);
   const isCameraReady = useRef(false);
-  const isCapturing = useRef(false); // guard against double-tap
+  const isCapturing = useRef(false);
   const tapAnim = useRef(new Animated.Value(1)).current;
 
   const { claudeApiKey, pokemonTcgApiKey, incrementCardScanCount, scanStats } = useSettingsStore();
@@ -58,7 +60,11 @@ export default function CardsScreen() {
   const { cards, addCard, removeCard, toggleFavorite } = useCardStore();
   const [selectedCard, setSelectedCard] = useState<TradingCard | null>(null);
 
-  // Stop any active work when tab loses focus
+  const filteredCards = cards.filter(c => {
+    if (historyFilter === 'all') return true;
+    return getCardCategory(c.game) === historyFilter;
+  });
+
   useFocusEffect(
     useCallback(() => {
       isCapturing.current = false;
@@ -73,14 +79,12 @@ export default function CardsScreen() {
     isCameraReady.current = true;
   }, []);
 
-  // ── Tap-to-scan: photo → Claude directly ─────────────────────────────────
-
   const handleFrameTap = useCallback(async () => {
     if (isCapturing.current || !isCameraReady.current || !cameraRef.current) return;
     if (phase !== 'ready') return;
 
     if (!canScan) {
-      Alert.alert('Limit erreicht', `Maximal ${CARD_SCAN_RATE_LIMIT} Karten-Scans heute. Starte die App neu um weiterzumachen.`);
+      Alert.alert('Limit erreicht', `Maximal ${CARD_SCAN_RATE_LIMIT} Scans heute. Starte die App neu um weiterzumachen.`);
       return;
     }
     if (!claudeApiKey) {
@@ -104,7 +108,6 @@ export default function CardsScreen() {
 
       setPhase('processing');
 
-      // Crop to card frame: 8% horizontal padding, card aspect ratio 0.716, vertically centered
       const { width: sw, height: sh } = Dimensions.get('window');
       const scale = Math.max(photo.width / sw, photo.height / sh);
       const ox = (photo.width - sw * scale) / 2;
@@ -124,9 +127,8 @@ export default function CardsScreen() {
       );
 
       const result = await identifyCard(claudeApiKey, cropped.uri);
-      // Auto-fetch prices immediately after recognition
       const prices = await fetchCardPrice(
-        { game: result.game, name: result.name, setCode: result.setCode, cardNumber: result.cardNumber },
+        { game: result.game, name: result.name, setCode: result.setCode, cardNumber: result.cardNumber, searchQuery: result.searchQuery },
         pokemonTcgApiKey || undefined,
       );
       setPendingCard({ imageUri: cropped.uri, result: { ...result, source: 'claude' }, prices: prices ?? undefined });
@@ -141,12 +143,8 @@ export default function CardsScreen() {
     }
   }, [phase, claudeApiKey, canScan, tapAnim]);
 
-  // ── Save card ──────────────────────────────────────────────────────────────
-
   const handleSave = useCallback(async () => {
     if (!pendingCard) return;
-
-    const prices = pendingCard.prices;
 
     const card: TradingCard = {
       id: uuidv4(),
@@ -160,14 +158,14 @@ export default function CardsScreen() {
       imageUri: pendingCard.imageUri,
       isFavorite: false,
       scannedAt: new Date().toISOString(),
-      prices: prices ?? undefined,
+      prices: pendingCard.prices ?? undefined,
     };
 
     addCard(card);
     setPendingCard(null);
     setPhase('ready');
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-  }, [pendingCard, addCard, pokemonTcgApiKey]);
+  }, [pendingCard, addCard]);
 
   const handleDiscard = useCallback(() => {
     setPendingCard(null);
@@ -175,13 +173,116 @@ export default function CardsScreen() {
     setPhase('ready');
   }, []);
 
-  // ── Permission ─────────────────────────────────────────────────────────────
-
   if (!permission?.granted && phase !== 'history') {
     requestPermission();
   }
 
   const isInCameraPhase = ['ready', 'capturing', 'processing'].includes(phase);
+
+  // ── Price display helpers ────────────────────────────────────────────────────
+
+  function renderPriceSection(prices: NonNullable<TradingCard['prices']>, game: TradingCard['game']) {
+    const category = getCardCategory(game);
+
+    if (category === 'sports') {
+      return (
+        <TouchableOpacity
+          onPress={() => prices.ebayUrl && Linking.openURL(prices.ebayUrl)}
+          activeOpacity={prices.ebayUrl ? 0.7 : 1}
+        >
+          <GlowCard style={{ marginBottom: 12, borderColor: prices.ebayUrl ? theme.colors.primary + '55' : theme.colors.border, borderWidth: 1 }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <ThemedText weight="semibold" size="sm">eBay · Aktive Angebote</ThemedText>
+              {prices.ebayUrl && <Text style={{ color: theme.colors.primary, fontSize: 12 }}>Suchen →</Text>}
+            </View>
+            {prices.ebayMinPrice ? (
+              <View style={styles.priceRow}>
+                <ThemedText variant="muted" size="sm">Günstigstes Angebot</ThemedText>
+                <ThemedText weight="bold" style={{ color: theme.colors.primary }}>{formatPrice(prices.ebayMinPrice)}</ThemedText>
+              </View>
+            ) : null}
+            {prices.ebayAvgPrice ? (
+              <View style={styles.priceRow}>
+                <ThemedText variant="muted" size="sm">Durchschnitt</ThemedText>
+                <ThemedText weight="semibold">{formatPrice(prices.ebayAvgPrice)}</ThemedText>
+              </View>
+            ) : null}
+            {!prices.ebayMinPrice && !prices.ebayAvgPrice && (
+              <ThemedText variant="muted" size="sm">Keine Angebote gefunden — auf eBay suchen</ThemedText>
+            )}
+          </GlowCard>
+        </TouchableOpacity>
+      );
+    }
+
+    // TCG / other — Cardmarket + TCGPlayer
+    return (
+      <>
+        <TouchableOpacity
+          onPress={() => prices.cardmarketUrl && Linking.openURL(prices.cardmarketUrl)}
+          activeOpacity={prices.cardmarketUrl ? 0.7 : 1}
+        >
+          <GlowCard style={{ marginBottom: 12, borderColor: prices.cardmarketUrl ? theme.colors.primary + '55' : theme.colors.border, borderWidth: 1 }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <ThemedText weight="semibold" size="sm">Cardmarket</ThemedText>
+              {prices.cardmarketUrl && <Text style={{ color: theme.colors.primary, fontSize: 12 }}>Öffnen →</Text>}
+            </View>
+            {prices.cardmarketLow ? (
+              <View style={styles.priceRow}>
+                <ThemedText variant="muted" size="sm">Niedrigster Preis</ThemedText>
+                <ThemedText weight="bold" style={{ color: theme.colors.primary }}>{formatPrice(prices.cardmarketLow)}</ThemedText>
+              </View>
+            ) : null}
+            {prices.cardmarketMid ? (
+              <View style={styles.priceRow}>
+                <ThemedText variant="muted" size="sm">Durchschnitt</ThemedText>
+                <ThemedText weight="semibold">{formatPrice(prices.cardmarketMid)}</ThemedText>
+              </View>
+            ) : null}
+            {prices.cardmarketTrend ? (
+              <View style={styles.priceRow}>
+                <ThemedText variant="muted" size="sm">Trend</ThemedText>
+                <ThemedText variant="secondary">{formatPrice(prices.cardmarketTrend)}</ThemedText>
+              </View>
+            ) : null}
+            {!prices.cardmarketLow && !prices.cardmarketMid && (
+              <ThemedText variant="muted" size="sm">Kein Preis verfügbar</ThemedText>
+            )}
+          </GlowCard>
+        </TouchableOpacity>
+        {prices.tcgplayerLow ? (
+          <GlowCard style={{ marginBottom: 12 }}>
+            <ThemedText weight="semibold" size="sm" style={{ marginBottom: 6 }}>TCGPlayer</ThemedText>
+            <View style={styles.priceRow}>
+              <ThemedText variant="muted" size="sm">Niedrigster Preis</ThemedText>
+              <ThemedText weight="bold">{formatPrice(prices.tcgplayerLow)}</ThemedText>
+            </View>
+            {prices.tcgplayerMid ? (
+              <View style={styles.priceRow}>
+                <ThemedText variant="muted" size="sm">Market</ThemedText>
+                <ThemedText variant="secondary">{formatPrice(prices.tcgplayerMid)}</ThemedText>
+              </View>
+            ) : null}
+          </GlowCard>
+        ) : null}
+      </>
+    );
+  }
+
+  function renderCardBadge(game: TradingCard['game']) {
+    const category = getCardCategory(game);
+    const badgeColor = category === 'tcg' ? '#3b82f6' : category === 'sports' ? '#f59e0b' : theme.colors.border;
+    return (
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+        <View style={{ backgroundColor: badgeColor + '33', borderRadius: 6, paddingHorizontal: 7, paddingVertical: 2 }}>
+          <Text style={{ color: badgeColor, fontSize: 11, fontWeight: '600' }}>
+            {category === 'tcg' ? 'TCG' : category === 'sports' ? 'SPORTS' : 'CARD'}
+          </Text>
+        </View>
+        <ThemedText variant="secondary" size="sm">{getCardLabel(game)}</ThemedText>
+      </View>
+    );
+  }
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -198,12 +299,9 @@ export default function CardsScreen() {
             onCameraReady={handleCameraReady}
           />
 
-          {/* Flex column overlay — header / frame / bottom — properly centered */}
           <View style={{ flex: 1, flexDirection: 'column' }}>
-            {/* Spacer that matches header height so frame doesn't slide under it */}
             <View style={{ height: insets.top + 60 }} />
 
-            {/* Frame area — takes remaining space, centers the frame */}
             <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: '8%' }}>
               <TouchableOpacity
                 activeOpacity={1}
@@ -223,21 +321,21 @@ export default function CardsScreen() {
                     },
                   ]}
                 >
-                  {/* Corner marks */}
                   <View style={[styles.corner, styles.cornerTL, { borderColor: 'rgba(255,255,255,0.7)' }]} />
                   <View style={[styles.corner, styles.cornerTR, { borderColor: 'rgba(255,255,255,0.7)' }]} />
                   <View style={[styles.corner, styles.cornerBL, { borderColor: 'rgba(255,255,255,0.7)' }]} />
                   <View style={[styles.corner, styles.cornerBR, { borderColor: 'rgba(255,255,255,0.7)' }]} />
 
-                  {/* Center hint — only in ready state */}
                   {phase === 'ready' && (
                     <View style={styles.frameCenterHint}>
                       <Text style={styles.frameCenterIcon}>◎</Text>
                       <Text style={styles.frameCenterText}>Tippen zum Scannen</Text>
+                      <Text style={[styles.frameCenterText, { marginTop: 6, fontSize: 11, opacity: 0.75 }]}>
+                        Pokémon · Yu-Gi-Oh · Magic{'\n'}WWE · Baseball · Soccer · NBA …
+                      </Text>
                     </View>
                   )}
 
-                  {/* Scanning spinner inside frame */}
                   {(phase === 'capturing' || phase === 'processing') && (
                     <View style={styles.frameCenterHint}>
                       <ActivityIndicator color="#ffffff" size="large" />
@@ -250,7 +348,6 @@ export default function CardsScreen() {
               </TouchableOpacity>
             </View>
 
-            {/* Bottom hint — fixed height below frame */}
             <View style={{ height: insets.bottom + 80, justifyContent: 'flex-start', alignItems: 'center', paddingTop: 12, paddingHorizontal: 24 }}>
               {phase === 'ready' && (
                 <Text style={styles.hintText}>Karte in den Rahmen legen, dann auf den Rahmen tippen</Text>
@@ -258,7 +355,6 @@ export default function CardsScreen() {
             </View>
           </View>
 
-          {/* Header — absolute on top of everything */}
           <View style={[styles.cameraHeader, { paddingTop: insets.top + 12 }]}>
             <TouchableOpacity onPress={() => router.back()} style={styles.headerBackBtn} accessibilityLabel="Zurück">
               <Text style={styles.headerBackText}>← Zurück</Text>
@@ -271,7 +367,6 @@ export default function CardsScreen() {
               <Text style={styles.headerRightText}>Saved</Text>
             </TouchableOpacity>
           </View>
-
         </View>
       )}
 
@@ -283,36 +378,24 @@ export default function CardsScreen() {
           showsVerticalScrollIndicator={false}
         >
           {/* Card image */}
-          {pendingCard.prices?.cardImageUrl ? (
-            <View style={{ alignItems: 'center', marginBottom: 16 }}>
-              <Image
-                source={{ uri: pendingCard.prices.cardImageUrl }}
-                style={{ width: 180, height: 252, borderRadius: 8 }}
-                resizeMode="contain"
-              />
-            </View>
-          ) : (
-            <View style={{ alignItems: 'center', marginBottom: 16 }}>
-              <Image
-                source={{ uri: pendingCard.imageUri }}
-                style={{ width: 180, height: 252, borderRadius: 8 }}
-                resizeMode="contain"
-              />
-            </View>
-          )}
+          <View style={{ alignItems: 'center', marginBottom: 16 }}>
+            <Image
+              source={{ uri: pendingCard.prices?.cardImageUrl ?? pendingCard.imageUri }}
+              style={{ width: 180, height: 252, borderRadius: 8 }}
+              resizeMode="contain"
+            />
+          </View>
 
           {/* Card info */}
           <GlowCard style={{ marginBottom: 12 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-              <Text style={{ fontSize: 20 }}>
-                {pendingCard.result.game === 'pokemon' ? '⚡' : pendingCard.result.game === 'yugioh' ? '👁' : '⚔️'}
-              </Text>
+              <Text style={{ fontSize: 22 }}>{getCardEmoji(pendingCard.result.game)}</Text>
               <ThemedText weight="bold" size="xl" style={{ flex: 1 }}>{pendingCard.result.name}</ThemedText>
             </View>
-            <ThemedText variant="secondary">{pendingCard.result.game.toUpperCase()} · Claude ⚡</ThemedText>
+            {renderCardBadge(pendingCard.result.game)}
             {pendingCard.result.setName && <ThemedText variant="muted" style={{ marginTop: 4 }}>Set: {pendingCard.result.setName}</ThemedText>}
             {pendingCard.result.cardNumber && <ThemedText variant="muted">Nr: {pendingCard.result.cardNumber}</ThemedText>}
-            {pendingCard.result.rarity && <ThemedText variant="muted">Seltenheit: {pendingCard.result.rarity}</ThemedText>}
+            {pendingCard.result.rarity && <ThemedText variant="muted">Seltenheit/Variante: {pendingCard.result.rarity}</ThemedText>}
             {pendingCard.result.condition && (
               <ThemedText size="sm" style={{ color: theme.colors.primary, marginTop: 6 }}>
                 Zustand: {pendingCard.result.condition}
@@ -320,63 +403,8 @@ export default function CardsScreen() {
             )}
           </GlowCard>
 
-          {/* Prices */}
-          {pendingCard.prices && (
-            <TouchableOpacity
-              onPress={() => {
-                if (pendingCard.prices?.cardmarketUrl) {
-                  Linking.openURL(pendingCard.prices.cardmarketUrl);
-                }
-              }}
-              activeOpacity={pendingCard.prices.cardmarketUrl ? 0.7 : 1}
-            >
-              <GlowCard style={{ marginBottom: 12, borderColor: pendingCard.prices.cardmarketUrl ? theme.colors.primary + '55' : theme.colors.border, borderWidth: 1 }}>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                  <ThemedText weight="semibold" size="sm">Cardmarket</ThemedText>
-                  {pendingCard.prices.cardmarketUrl && (
-                    <Text style={{ color: theme.colors.primary, fontSize: 12 }}>Öffnen →</Text>
-                  )}
-                </View>
-                {pendingCard.prices.cardmarketLow && (
-                  <View style={styles.priceRow}>
-                    <ThemedText variant="muted" size="sm">Niedrigster Preis</ThemedText>
-                    <ThemedText weight="bold" style={{ color: theme.colors.primary }}>{formatPrice(pendingCard.prices.cardmarketLow)}</ThemedText>
-                  </View>
-                )}
-                {pendingCard.prices.cardmarketMid && (
-                  <View style={styles.priceRow}>
-                    <ThemedText variant="muted" size="sm">Durchschnitt</ThemedText>
-                    <ThemedText weight="semibold">{formatPrice(pendingCard.prices.cardmarketMid)}</ThemedText>
-                  </View>
-                )}
-                {pendingCard.prices.cardmarketTrend && (
-                  <View style={styles.priceRow}>
-                    <ThemedText variant="muted" size="sm">Trend</ThemedText>
-                    <ThemedText variant="secondary">{formatPrice(pendingCard.prices.cardmarketTrend)}</ThemedText>
-                  </View>
-                )}
-                {!pendingCard.prices.cardmarketLow && !pendingCard.prices.cardmarketMid && (
-                  <ThemedText variant="muted" size="sm">Kein Preis verfügbar</ThemedText>
-                )}
-              </GlowCard>
-            </TouchableOpacity>
-          )}
-
-          {pendingCard.prices?.tcgplayerLow && (
-            <GlowCard style={{ marginBottom: 12 }}>
-              <ThemedText weight="semibold" size="sm" style={{ marginBottom: 6 }}>TCGPlayer</ThemedText>
-              <View style={styles.priceRow}>
-                <ThemedText variant="muted" size="sm">Niedrigster Preis</ThemedText>
-                <ThemedText weight="bold">{formatPrice(pendingCard.prices.tcgplayerLow)}</ThemedText>
-              </View>
-              {pendingCard.prices.tcgplayerMid && (
-                <View style={styles.priceRow}>
-                  <ThemedText variant="muted" size="sm">Market</ThemedText>
-                  <ThemedText variant="secondary">{formatPrice(pendingCard.prices.tcgplayerMid)}</ThemedText>
-                </View>
-              )}
-            </GlowCard>
-          )}
+          {/* Prices — category-aware */}
+          {pendingCard.prices && renderPriceSection(pendingCard.prices, pendingCard.result.game)}
 
           <View style={{ flexDirection: 'row', gap: 12 }}>
             <PrimaryButton title="✓ Speichern" onPress={handleSave} style={{ flex: 1 }} />
@@ -404,53 +432,99 @@ export default function CardsScreen() {
             <View style={{ width: 80 }} />
           </View>
 
+          {/* Category filter */}
+          <View style={{ flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingVertical: 10 }}>
+            {(['all', 'tcg', 'sports'] as HistoryFilter[]).map(f => {
+              const active = historyFilter === f;
+              const label = f === 'all' ? `Alle (${cards.length})` : f === 'tcg' ? `TCG (${cards.filter(c => getCardCategory(c.game) === 'tcg').length})` : `Sports (${cards.filter(c => getCardCategory(c.game) === 'sports').length})`;
+              return (
+                <TouchableOpacity
+                  key={f}
+                  onPress={() => { setHistoryFilter(f); Haptics.selectionAsync(); }}
+                  style={{
+                    paddingHorizontal: 14,
+                    paddingVertical: 7,
+                    borderRadius: 20,
+                    backgroundColor: active ? theme.colors.primary : theme.colors.surface,
+                    borderWidth: 1,
+                    borderColor: active ? theme.colors.primary : theme.colors.border,
+                  }}
+                  accessibilityLabel={`Filter: ${label}`}
+                >
+                  <Text style={{ color: active ? theme.colors.background : theme.colors.text, fontSize: 13, fontWeight: active ? '700' : '400' }}>
+                    {label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
           <FlatList
-            data={cards}
+            data={filteredCards}
             keyExtractor={(c) => c.id}
-            renderItem={({ item }) => (
-              <TouchableOpacity onPress={() => setSelectedCard(item)} activeOpacity={0.75}>
-                <GlowCard style={{ marginHorizontal: 16, marginVertical: 6 }}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                    {/* Thumbnail */}
-                    {(item.imageUri || item.prices?.cardImageUrl) ? (
-                      <Image
-                        source={{ uri: item.prices?.cardImageUrl ?? item.imageUri }}
-                        style={{ width: 48, height: 67, borderRadius: 4 }}
-                        resizeMode="cover"
-                      />
-                    ) : (
-                      <View style={{ width: 48, height: 67, borderRadius: 4, backgroundColor: theme.colors.surface, alignItems: 'center', justifyContent: 'center' }}>
-                        <Text style={{ fontSize: 22 }}>{item.game === 'pokemon' ? '⚡' : item.game === 'yugioh' ? '👁' : '⚔️'}</Text>
-                      </View>
-                    )}
-                    <View style={{ flex: 1 }}>
-                      <ThemedText weight="semibold" numberOfLines={1}>{item.name}</ThemedText>
-                      <ThemedText variant="secondary" size="sm">
-                        {item.game.toUpperCase()} · {item.setName ?? 'Unbekanntes Set'}
-                      </ThemedText>
-                      {item.prices?.cardmarketLow && (
-                        <ThemedText style={{ color: theme.colors.primary, fontWeight: 'bold' }}>
-                          ab {formatPrice(item.prices.cardmarketLow)}
-                        </ThemedText>
+            renderItem={({ item }) => {
+              const category = getCardCategory(item.game);
+              const badgeColor = category === 'tcg' ? '#3b82f6' : category === 'sports' ? '#f59e0b' : theme.colors.border;
+              const priceDisplay = category === 'sports'
+                ? (item.prices?.ebayMinPrice ? `ab ${formatPrice(item.prices.ebayMinPrice)}` : null)
+                : (item.prices?.cardmarketLow ? `ab ${formatPrice(item.prices.cardmarketLow)}` : null);
+
+              return (
+                <TouchableOpacity onPress={() => setSelectedCard(item)} activeOpacity={0.75}>
+                  <GlowCard style={{ marginHorizontal: 16, marginVertical: 6 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                      {(item.imageUri || item.prices?.cardImageUrl) ? (
+                        <Image
+                          source={{ uri: item.prices?.cardImageUrl ?? item.imageUri }}
+                          style={{ width: 48, height: 67, borderRadius: 4 }}
+                          resizeMode="cover"
+                        />
+                      ) : (
+                        <View style={{ width: 48, height: 67, borderRadius: 4, backgroundColor: theme.colors.surface, alignItems: 'center', justifyContent: 'center' }}>
+                          <Text style={{ fontSize: 22 }}>{getCardEmoji(item.game)}</Text>
+                        </View>
                       )}
+                      <View style={{ flex: 1 }}>
+                        <ThemedText weight="semibold" numberOfLines={1}>{item.name}</ThemedText>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 }}>
+                          <View style={{ backgroundColor: badgeColor + '33', borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1 }}>
+                            <Text style={{ color: badgeColor, fontSize: 10, fontWeight: '600' }}>
+                              {category === 'tcg' ? 'TCG' : category === 'sports' ? 'SPORTS' : 'CARD'}
+                            </Text>
+                          </View>
+                          <ThemedText variant="secondary" size="sm" numberOfLines={1} style={{ flex: 1 }}>
+                            {item.setName ?? getCardLabel(item.game)}
+                          </ThemedText>
+                        </View>
+                        {priceDisplay && (
+                          <ThemedText style={{ color: theme.colors.primary, fontWeight: 'bold', marginTop: 2 }}>
+                            {priceDisplay}
+                          </ThemedText>
+                        )}
+                      </View>
+                      <View style={{ flexDirection: 'row', gap: 8 }}>
+                        <TouchableOpacity onPress={() => toggleFavorite(item.id)} accessibilityLabel={item.isFavorite ? 'Aus Favoriten entfernen' : 'Zu Favoriten'}>
+                          <Text style={{ fontSize: 22 }}>{item.isFavorite ? '⭐' : '☆'}</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          onPress={() => { Alert.alert('Löschen', `"${item.name}" löschen?`, [{ text: 'Abbrechen', style: 'cancel' }, { text: 'Löschen', style: 'destructive', onPress: () => removeCard(item.id) }]); }}
+                          accessibilityLabel="Karte löschen"
+                        >
+                          <Text style={{ fontSize: 22 }}>🗑️</Text>
+                        </TouchableOpacity>
+                      </View>
                     </View>
-                    <View style={{ flexDirection: 'row', gap: 8 }}>
-                      <TouchableOpacity onPress={() => toggleFavorite(item.id)} accessibilityLabel={item.isFavorite ? 'Aus Favoriten entfernen' : 'Zu Favoriten'}>
-                        <Text style={{ fontSize: 22 }}>{item.isFavorite ? '⭐' : '☆'}</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity onPress={() => { Alert.alert('Löschen', `"${item.name}" löschen?`, [{ text: 'Abbrechen', style: 'cancel' }, { text: 'Löschen', style: 'destructive', onPress: () => removeCard(item.id) }]); }} accessibilityLabel="Karte löschen">
-                        <Text style={{ fontSize: 22 }}>🗑️</Text>
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                </GlowCard>
-              </TouchableOpacity>
-            )}
+                  </GlowCard>
+                </TouchableOpacity>
+              );
+            }}
             ListEmptyComponent={
               <View style={{ alignItems: 'center', paddingVertical: 60 }}>
                 <Text style={{ fontSize: 64 }}>♦</Text>
                 <ThemedText weight="bold" size="xl" style={{ marginTop: 16 }}>Keine Karten</ThemedText>
-                <ThemedText variant="secondary" style={{ textAlign: 'center' }}>Scanne deine erste Karte</ThemedText>
+                <ThemedText variant="secondary" style={{ textAlign: 'center' }}>
+                  {historyFilter === 'all' ? 'Scanne deine erste Karte' : `Keine ${historyFilter === 'tcg' ? 'TCG' : 'Sports'}-Karten gespeichert`}
+                </ThemedText>
               </View>
             }
             showsVerticalScrollIndicator={false}
@@ -465,7 +539,6 @@ export default function CardsScreen() {
           >
             <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' }}>
               <View style={{ backgroundColor: theme.colors.background, borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: '92%' }}>
-                {/* Modal Header */}
                 <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderBottomWidth: 1, borderBottomColor: theme.colors.border }}>
                   <ThemedText weight="bold" size="lg" numberOfLines={1} style={{ flex: 1 }}>{selectedCard?.name}</ThemedText>
                   <TouchableOpacity onPress={() => setSelectedCard(null)} style={{ paddingLeft: 12 }}>
@@ -474,7 +547,6 @@ export default function CardsScreen() {
                 </View>
 
                 <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 40 }} showsVerticalScrollIndicator={false}>
-                  {/* Photo */}
                   {selectedCard && (selectedCard.prices?.cardImageUrl || selectedCard.imageUri) && (
                     <View style={{ alignItems: 'center', marginBottom: 16 }}>
                       <Image
@@ -485,18 +557,17 @@ export default function CardsScreen() {
                     </View>
                   )}
 
-                  {/* Card Info */}
                   {selectedCard && (
                     <GlowCard style={{ marginBottom: 12 }}>
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                        <Text style={{ fontSize: 22 }}>{selectedCard.game === 'pokemon' ? '⚡' : selectedCard.game === 'yugioh' ? '👁' : '⚔️'}</Text>
+                        <Text style={{ fontSize: 22 }}>{getCardEmoji(selectedCard.game)}</Text>
                         <ThemedText weight="bold" size="lg" style={{ flex: 1 }}>{selectedCard.name}</ThemedText>
                         {selectedCard.isFavorite && <Text style={{ fontSize: 18 }}>⭐</Text>}
                       </View>
-                      <ThemedText variant="secondary" size="sm">{selectedCard.game.toUpperCase()}</ThemedText>
+                      {renderCardBadge(selectedCard.game)}
                       {selectedCard.setName && <ThemedText variant="muted" size="sm" style={{ marginTop: 4 }}>Set: {selectedCard.setName}</ThemedText>}
                       {selectedCard.cardNumber && <ThemedText variant="muted" size="sm">Nr: {selectedCard.cardNumber}</ThemedText>}
-                      {selectedCard.rarity && <ThemedText variant="muted" size="sm">Seltenheit: {selectedCard.rarity}</ThemedText>}
+                      {selectedCard.rarity && <ThemedText variant="muted" size="sm">Seltenheit/Variante: {selectedCard.rarity}</ThemedText>}
                       {selectedCard.condition && <ThemedText variant="muted" size="sm">Zustand: {selectedCard.condition}</ThemedText>}
                       <ThemedText variant="muted" size="xs" style={{ marginTop: 6 }}>
                         Gescannt: {new Date(selectedCard.scannedAt).toLocaleDateString('de-DE')}
@@ -504,63 +575,16 @@ export default function CardsScreen() {
                     </GlowCard>
                   )}
 
-                  {/* Cardmarket Preise */}
-                  {selectedCard?.prices && (
-                    <TouchableOpacity
-                      onPress={() => selectedCard.prices?.cardmarketUrl && Linking.openURL(selectedCard.prices.cardmarketUrl)}
-                      activeOpacity={selectedCard.prices.cardmarketUrl ? 0.75 : 1}
-                    >
-                      <GlowCard style={{ marginBottom: 12, borderColor: theme.colors.primary + '44', borderWidth: 1 }}>
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                          <ThemedText weight="semibold">Cardmarket</ThemedText>
-                          {selectedCard.prices.cardmarketUrl && <Text style={{ color: theme.colors.primary, fontSize: 12 }}>Öffnen →</Text>}
-                        </View>
-                        {selectedCard.prices.cardmarketLow && (
-                          <View style={styles.priceRow}>
-                            <ThemedText variant="muted" size="sm">Niedrigster Preis</ThemedText>
-                            <ThemedText weight="bold" style={{ color: theme.colors.primary }}>{formatPrice(selectedCard.prices.cardmarketLow)}</ThemedText>
-                          </View>
-                        )}
-                        {selectedCard.prices.cardmarketMid && (
-                          <View style={styles.priceRow}>
-                            <ThemedText variant="muted" size="sm">Durchschnitt</ThemedText>
-                            <ThemedText weight="semibold">{formatPrice(selectedCard.prices.cardmarketMid)}</ThemedText>
-                          </View>
-                        )}
-                        {selectedCard.prices.cardmarketTrend && (
-                          <View style={styles.priceRow}>
-                            <ThemedText variant="muted" size="sm">Trend</ThemedText>
-                            <ThemedText variant="secondary">{formatPrice(selectedCard.prices.cardmarketTrend)}</ThemedText>
-                          </View>
-                        )}
-                        {!selectedCard.prices.cardmarketLow && !selectedCard.prices.cardmarketMid && (
-                          <ThemedText variant="muted" size="sm">Kein Preis verfügbar</ThemedText>
-                        )}
-                      </GlowCard>
-                    </TouchableOpacity>
-                  )}
+                  {selectedCard?.prices && renderPriceSection(selectedCard.prices, selectedCard.game)}
 
-                  {/* TCGPlayer */}
-                  {selectedCard?.prices?.tcgplayerLow && (
-                    <GlowCard style={{ marginBottom: 12 }}>
-                      <ThemedText weight="semibold" style={{ marginBottom: 8 }}>TCGPlayer</ThemedText>
-                      <View style={styles.priceRow}>
-                        <ThemedText variant="muted" size="sm">Niedrigster Preis</ThemedText>
-                        <ThemedText weight="bold">{formatPrice(selectedCard.prices.tcgplayerLow)}</ThemedText>
-                      </View>
-                      {selectedCard.prices.tcgplayerMid && (
-                        <View style={styles.priceRow}>
-                          <ThemedText variant="muted" size="sm">Market</ThemedText>
-                          <ThemedText variant="secondary">{formatPrice(selectedCard.prices.tcgplayerMid)}</ThemedText>
-                        </View>
-                      )}
-                    </GlowCard>
-                  )}
-
-                  {/* Actions */}
                   <View style={{ flexDirection: 'row', gap: 12, marginTop: 8 }}>
                     <TouchableOpacity
-                      onPress={() => { if (selectedCard) { toggleFavorite(selectedCard.id); setSelectedCard(cards.find(c => c.id === selectedCard.id) ?? null); } }}
+                      onPress={() => {
+                        if (selectedCard) {
+                          toggleFavorite(selectedCard.id);
+                          setSelectedCard(cards.find(c => c.id === selectedCard.id) ?? null);
+                        }
+                      }}
                       style={{ flex: 1, padding: 14, borderRadius: 10, borderWidth: 1, borderColor: theme.colors.border, alignItems: 'center' }}
                     >
                       <Text style={{ fontSize: 18 }}>{selectedCard?.isFavorite ? '⭐ Favorit' : '☆ Favorit'}</Text>
@@ -602,7 +626,6 @@ const CORNER_SIZE = 18;
 const styles = StyleSheet.create({
   container: { flex: 1 },
 
-  // Camera header
   cameraHeader: {
     position: 'absolute',
     top: 0, left: 0, right: 0,
@@ -621,7 +644,6 @@ const styles = StyleSheet.create({
   headerRightBtn: { width: 80, alignItems: 'flex-end' },
   headerRightText: { color: 'white', fontSize: 15, fontWeight: '500' },
 
-  // Card frame border
   cardFrame: {
     width: '100%',
     aspectRatio: 0.716,
@@ -631,7 +653,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
 
-  // Corner accent marks
   corner: {
     position: 'absolute',
     width: CORNER_SIZE,
@@ -644,10 +665,10 @@ const styles = StyleSheet.create({
   cornerBL: { bottom: -1, left: -1, borderRightWidth: 0, borderTopWidth: 0 },
   cornerBR: { bottom: -1, right: -1, borderLeftWidth: 0, borderTopWidth: 0 },
 
-  // Hint shown inside frame
   frameCenterHint: {
     alignItems: 'center',
     gap: 10,
+    paddingHorizontal: 20,
   },
   frameCenterIcon: {
     color: 'rgba(255,255,255,0.6)',
@@ -668,19 +689,16 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 
-  // Result overlay (floats above camera)
   resultOverlay: {
     position: 'absolute',
     left: 0, right: 0,
     zIndex: 20,
   },
 
-  // Full-screen overlay for Claude result
   overlay: { padding: 20, gap: 12 },
 
   priceRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 2 },
 
-  // History
   historyHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -691,7 +709,6 @@ const styles = StyleSheet.create({
   },
   historyBackText: { fontSize: 15, fontWeight: '600' },
 
-  // FAB
   fab: {
     position: 'absolute',
     right: 24,

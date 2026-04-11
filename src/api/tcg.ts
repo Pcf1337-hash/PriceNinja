@@ -9,7 +9,8 @@
  */
 
 import { getCache, setCache } from '@/src/utils/cache';
-import { CardPrices, TradingCard } from '@/src/types/card';
+import { CardPrices, CardGame, TradingCard, getCardCategory } from '@/src/types/card';
+import { fetchSoldListingsPublic } from '@/src/api/ebay';
 
 const PRICE_CACHE_TTL = 60 * 60 * 1000; // 1 hour
 
@@ -170,20 +171,23 @@ async function fetchYugiohPrices(name: string): Promise<CardPrices | null> {
   }
 }
 
-// ── Cardmarket scraping (fallback) ───────────────────────────────────────────
+// ── Cardmarket scraping (fallback — TCG only) ────────────────────────────────
+
+type TCGGame = 'pokemon' | 'yugioh' | 'magic' | 'other';
+
+const CARDMARKET_SLUG: Record<TCGGame, string> = {
+  pokemon: 'Pokemon',
+  yugioh: 'YuGiOh',
+  magic: 'Magic',
+  other: 'Pokemon', // generic fallback within TCG
+};
 
 function buildCardmarketUrl(
-  game: TradingCard['game'],
+  game: TCGGame,
   name: string,
   setCode?: string,
 ): string {
-  const gameMap: Record<TradingCard['game'], string> = {
-    pokemon: 'Pokemon',
-    yugioh: 'YuGiOh',
-    magic: 'Magic',
-    other: 'Pokemon',
-  };
-  const slug = gameMap[game];
+  const slug = CARDMARKET_SLUG[game];
   const q = encodeURIComponent(name);
   if (setCode) {
     return `https://www.cardmarket.com/de/${slug}/Products/Search?searchString=${q}&expansionName=${encodeURIComponent(setCode)}`;
@@ -211,8 +215,9 @@ function parseCardmarketPrices(html: string): Pick<CardPrices, 'cardmarketLow' |
 async function fetchCardmarketPrices(
   card: Pick<TradingCard, 'game' | 'name' | 'setCode'>,
 ): Promise<CardPrices | null> {
+  const tcgGame: TCGGame = (card.game === 'pokemon' || card.game === 'yugioh' || card.game === 'magic') ? card.game : 'other';
   try {
-    const url = buildCardmarketUrl(card.game, card.name, card.setCode);
+    const url = buildCardmarketUrl(tcgGame, card.name, card.setCode);
     const res = await fetch(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Android 14; Mobile; rv:109.0) Gecko/109.0 Firefox/109.0',
@@ -230,10 +235,52 @@ async function fetchCardmarketPrices(
   }
 }
 
+// ── Sports Cards via eBay Browse API ─────────────────────────────────────────
+
+// eBay category IDs for cards
+const SPORTS_CARD_EBAY_CAT = '108765'; // Sports Trading Cards
+const NON_SPORT_EBAY_CAT = '183050';   // Non-Sport Trading Card Singles
+
+function getSportsEbayCategoryId(game: CardGame): string {
+  if (game === 'wwe') return NON_SPORT_EBAY_CAT;
+  return SPORTS_CARD_EBAY_CAT;
+}
+
+async function fetchSportsCardPrices(
+  searchQuery: string,
+  game: CardGame,
+): Promise<CardPrices | null> {
+  try {
+    const catId = getSportsEbayCategoryId(game);
+    const listings = await fetchSoldListingsPublic(searchQuery, 15, catId);
+    const validPrices = listings.map(l => l.price).filter(p => p > 0.5);
+    if (validPrices.length === 0) {
+      // No live listings found — return URL-only so user can still search
+      return {
+        ebayUrl: `https://www.ebay.de/sch/i.html?_nkw=${encodeURIComponent(searchQuery)}&_sacat=${catId}`,
+        currency: 'EUR',
+        updatedAt: new Date().toISOString(),
+      };
+    }
+    validPrices.sort((a, b) => a - b);
+    const min = validPrices[0];
+    const avg = validPrices.reduce((s, p) => s + p, 0) / validPrices.length;
+    return {
+      ebayAvgPrice: Math.round(avg * 100) / 100,
+      ebayMinPrice: min,
+      ebayUrl: `https://www.ebay.de/sch/i.html?_nkw=${encodeURIComponent(searchQuery)}&_sacat=${catId}`,
+      currency: listings[0]?.currency ?? 'EUR',
+      updatedAt: new Date().toISOString(),
+    };
+  } catch {
+    return null;
+  }
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 export async function fetchCardPrice(
-  card: Pick<TradingCard, 'game' | 'name' | 'setCode' | 'cardNumber'>,
+  card: Pick<TradingCard, 'game' | 'name' | 'setCode' | 'cardNumber'> & { searchQuery?: string },
   apiKey?: string,
 ): Promise<CardPrices | null> {
   const cacheKey = `prices_${card.game}_${card.name}_${card.setCode ?? ''}_${card.cardNumber ?? ''}`
@@ -244,8 +291,13 @@ export async function fetchCardPrice(
   if (cached) return cached;
 
   let prices: CardPrices | null = null;
+  const category = getCardCategory(card.game);
 
-  if (card.game === 'pokemon') {
+  if (category === 'sports') {
+    // Sports cards: eBay Browse API with Claude's optimized search query
+    const query = card.searchQuery ?? card.name;
+    prices = await fetchSportsCardPrices(query, card.game);
+  } else if (card.game === 'pokemon') {
     prices = await fetchPokemonPrices(card.name, card.setCode, card.cardNumber, apiKey);
   } else if (card.game === 'magic') {
     prices = await fetchMagicPrices(card.name, card.setCode);
@@ -253,15 +305,16 @@ export async function fetchCardPrice(
     prices = await fetchYugiohPrices(card.name);
   }
 
-  // Last resort: Cardmarket scraping (rarely reached since all major APIs provide prices)
-  if (!prices) {
+  // Last resort for TCG: Cardmarket scraping
+  if (!prices && category === 'tcg') {
     prices = await fetchCardmarketPrices(card);
   }
 
   if (prices) {
-    // Always attach a Cardmarket URL if not already set
-    if (!prices.cardmarketUrl) {
-      prices.cardmarketUrl = buildCardmarketUrl(card.game, card.name, card.setCode);
+    // Cardmarket URL only makes sense for TCG games
+    if (category === 'tcg' && !prices.cardmarketUrl) {
+      const tcgGame = (card.game === 'pokemon' || card.game === 'yugioh' || card.game === 'magic' ? card.game : 'other') as TCGGame;
+      prices.cardmarketUrl = buildCardmarketUrl(tcgGame, card.name, card.setCode);
     }
     await setCache(cacheKey, prices, PRICE_CACHE_TTL);
   }

@@ -14,6 +14,7 @@ import { PriceChart } from '@/src/components/PriceChart';
 import { fetchSoldListingsPublic } from '@/src/api/ebay';
 import { fetchGeizhalsPrice } from '@/src/api/geizhals';
 import { fetchBricklinkPrice, fetchBricklinkListings, BricklinkListing } from '@/src/api/bricklink';
+import { fetchRebrickableSet, RebrickableSet } from '@/src/api/rebrickable';
 import { EbaySoldListing } from '@/src/types/item';
 import { getDatabase, updateItemPrices, insertPricePoint } from '@/src/db';
 
@@ -29,24 +30,25 @@ export default function ItemDetailScreen() {
 
   const [soldListings, setSoldListings] = useState<EbaySoldListing[]>([]);
   const [blListings, setBlListings] = useState<BricklinkListing[]>([]);
+  const [rebrickable, setRebrickable] = useState<RebrickableSet | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshMsg, setRefreshMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const refreshMsgTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoLoadDone = useRef(false);
 
-  // BrickLink-Listings beim Öffnen laden wenn Item LEGO ist
+  // BrickLink-Listings + Rebrickable-Daten beim Öffnen laden wenn Item LEGO ist
   useEffect(() => {
-    if (!item.isLegoOrBricks) {
-      return;
-    }
+    if (!item?.isLegoOrBricks) return;
     const query = item.legoSetNumber ?? item.name;
+    // BrickLink Marktangebote
     fetchBricklinkPrice(query)
-      .then(bl => {
-        if (!bl) return;
-        return fetchBricklinkListings(bl.itemId, bl.type).then(setBlListings);
-      })
+      .then(bl => { if (bl) fetchBricklinkListings(bl.itemId, bl.type).then(setBlListings).catch(() => {}); })
       .catch(() => {});
-  }, [item.id]);
+    // Rebrickable Katalogdaten
+    fetchRebrickableSet(item.legoSetNumber, item.name)
+      .then(rb => { if (rb) setRebrickable(rb); })
+      .catch(() => {});
+  }, [item?.id]);
 
   // eBay-Preise automatisch beim Öffnen laden (einmalig)
   useEffect(() => {
@@ -69,7 +71,7 @@ export default function ItemDetailScreen() {
     );
   }
 
-  const trend = item.ebaySoldAvg && item.priceHistory.length > 1
+  const trend = item?.ebaySoldAvg && item.priceHistory.length > 1
     ? priceTrend(item.ebaySoldAvg, item.priceHistory[1]?.ebaySoldAvg ?? item.ebaySoldAvg)
     : 'stable';
   const trendColor = { up: theme.colors.priceUp, down: theme.colors.priceDown, stable: theme.colors.priceStable }[trend];
@@ -320,6 +322,34 @@ export default function ItemDetailScreen() {
                 <ThemedText variant="muted" size="xs" style={{ marginTop: 6 }}>Gefunden – Keine Preisdaten</ThemedText>
               )}
             </View>
+          </TouchableOpacity>
+        )}
+
+        {/* Rebrickable LEGO set info */}
+        {rebrickable && (
+          <TouchableOpacity onPress={() => Linking.openURL(rebrickable.setUrl)} activeOpacity={0.7}>
+            <GlowCard style={{ borderColor: '#e3000b33', borderWidth: 1 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
+                {rebrickable.setImgUrl ? (
+                  <Image
+                    source={{ uri: rebrickable.setImgUrl }}
+                    style={{ width: 72, height: 72, borderRadius: 8, backgroundColor: '#fff' }}
+                    resizeMode="contain"
+                  />
+                ) : null}
+                <View style={{ flex: 1 }}>
+                  <View style={[styles.priceSourceTag, { backgroundColor: '#e3000b22', alignSelf: 'flex-start', marginBottom: 6 }]}>
+                    <ThemedText size="xs" weight="bold" style={{ color: '#e3000b' }}>REBRICKABLE</ThemedText>
+                  </View>
+                  <ThemedText weight="bold" numberOfLines={2}>{rebrickable.name}</ThemedText>
+                  <ThemedText variant="muted" size="sm" style={{ marginTop: 2 }}>
+                    {[rebrickable.themeName, rebrickable.year > 0 ? String(rebrickable.year) : null].filter(Boolean).join(' · ')}
+                  </ThemedText>
+                  <ThemedText variant="muted" size="sm">{rebrickable.numParts} Teile · {rebrickable.setNum}</ThemedText>
+                  <ThemedText size="xs" style={{ color: '#e3000b', marginTop: 4 }}>→ rebrickable.com</ThemedText>
+                </View>
+              </View>
+            </GlowCard>
           </TouchableOpacity>
         )}
 
